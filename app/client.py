@@ -12,6 +12,59 @@ SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 5555
 
 
+class AuthWorker(QtCore.QThread):
+    success = QtCore.pyqtSignal(object, str)
+    error = QtCore.pyqtSignal(str)
+
+    def __init__(self, host, port, username, password, email, mode):
+        super().__init__()
+        self.host = host
+        self.port = port
+        self.username = username
+        self.password = password
+        self.email = email
+        self.mode = mode
+
+    def run(self):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((self.host, self.port))
+            login_data = json.dumps({
+                "action": self.mode,
+                "username": self.username,
+                "password": self.password,
+                "email": self.email
+            }) + "\n"
+            sock.send(login_data.encode())
+
+            buffer = ""
+            while "\n" not in buffer:
+                data = sock.recv(1024).decode()
+                if not data:
+                    raise Exception("Server closed")
+                buffer += data
+
+            line, rest = buffer.split("\n", 1)
+            resp = json.loads(line)
+
+            if resp.get("type") != "auth":
+                raise Exception("Auth failed")
+
+            if resp.get("status") == "need_code":
+                self.success.emit(sock, "need_code")
+                return
+
+            if resp.get("status") != "ok":
+                msg = resp.get("message", "?? ??????? ?????")
+                sock.close()
+                self.error.emit(msg)
+                return
+
+            self.success.emit(sock, rest)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class ReceiverThread(QtCore.QThread):
     message_received = QtCore.pyqtSignal(dict)
     connection_lost = QtCore.pyqtSignal()
@@ -59,25 +112,36 @@ class AvatarLabel(QtWidgets.QLabel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._pixmap = None
+        self._avatar_data = ""
+        self._pending_token = 0
+
+    @QtCore.pyqtSlot(QtGui.QImage, int)
+    def _on_avatar_decoded(self, image, token):
+        if token != self._pending_token:
+            return
+        if image is None or image.isNull():
+            self._pixmap = None
+        else:
+            self._pixmap = QtGui.QPixmap.fromImage(image)
+        self.update()
 
     def set_avatar_data(self, data_url):
+        if data_url == self._avatar_data:
+            return
+        self._avatar_data = data_url or ""
         self._pixmap = None
-        if not data_url or not isinstance(data_url, str):
+        self._pending_token += 1
+        token = self._pending_token
+
+        if not self._avatar_data or not isinstance(self._avatar_data, str):
             self.update()
             return
-        if not data_url.startswith("data:image/"):
+        if not self._avatar_data.startswith("data:image/"):
             self.update()
             return
-        try:
-            header, b64 = data_url.split(",", 1)
-            raw = base64.b64decode(b64)
-            pix = QtGui.QPixmap()
-            pix.loadFromData(raw)
-            if not pix.isNull():
-                self._pixmap = pix
-        except Exception:
-            self._pixmap = None
-        self.update()
+
+        runnable = AvatarDecodeRunnable(self._avatar_data, token, self)
+        QtCore.QThreadPool.globalInstance().start(runnable)
 
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
@@ -105,6 +169,67 @@ class AvatarLabel(QtWidgets.QLabel):
             painter.setPen(QtGui.QColor("#9ca3af"))
             painter.setFont(self.font())
             painter.drawText(rect, QtCore.Qt.AlignCenter, self.text())
+
+
+class SenderThread(QtCore.QThread):
+    error = QtCore.pyqtSignal(str)
+
+    def __init__(self, sock):
+        super().__init__()
+        self.sock = sock
+        self._running = True
+        self._queue = []
+        self._lock = threading.Lock()
+        self._event = threading.Event()
+
+    def stop(self):
+        self._running = False
+        self._event.set()
+
+    def send(self, payload):
+        data = json.dumps(payload) + "\n"
+        with self._lock:
+            self._queue.append(data)
+        self._event.set()
+
+    def run(self):
+        while self._running:
+            self._event.wait()
+            self._event.clear()
+            while True:
+                with self._lock:
+                    if not self._queue:
+                        break
+                    data = self._queue.pop(0)
+                try:
+                    self.sock.sendall(data.encode())
+                except Exception as e:
+                    self.error.emit(str(e))
+                    return
+
+
+class AvatarDecodeRunnable(QtCore.QRunnable):
+    def __init__(self, data_url, token, target):
+        super().__init__()
+        self.data_url = data_url
+        self.token = token
+        self.target = target
+
+    def run(self):
+        image = QtGui.QImage()
+        try:
+            _, b64 = self.data_url.split(",", 1)
+            raw = base64.b64decode(b64)
+            image.loadFromData(raw)
+        except Exception:
+            image = QtGui.QImage()
+        QtCore.QMetaObject.invokeMethod(
+            self.target,
+            "_on_avatar_decoded",
+            QtCore.Qt.QueuedConnection,
+            QtCore.Q_ARG(QtGui.QImage, image),
+            QtCore.Q_ARG(int, self.token)
+        )
 
 
 class AvatarEncodeWorker(QtCore.QThread):
@@ -296,6 +421,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.auth_mode = "login"
         self.pending_socket = None
         self.receiver_thread = None
+        self.sender_thread = None
+        self.auth_worker = None
         self.chat_mode = "group"
         self.dm_target = None
         self.conversations = {"group": []}
@@ -304,6 +431,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.latest_users = []
         self.user_directory = {}
         self.profile_dialogs = {}
+        self.avatar_cache_path = os.path.join(os.path.dirname(__file__), "avatar_cache.json")
+        self.avatar_cache = self._load_avatar_cache()
 
         self.setup_ui()
         self.show_login_screen()
@@ -577,11 +706,29 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.stack.setCurrentWidget(self.chat_page)
         self.set_chat_mode("group")
 
+    def _load_avatar_cache(self):
+        try:
+            if os.path.exists(self.avatar_cache_path):
+                with open(self.avatar_cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+        return {}
+
+    def _save_avatar_cache(self):
+        try:
+            with open(self.avatar_cache_path, "w", encoding="utf-8") as f:
+                json.dump(self.avatar_cache, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     def _send_action(self, payload):
-        if not self.client_socket:
+        if not self.sender_thread:
             return
         try:
-            self.client_socket.send((json.dumps(payload) + "\n").encode())
+            self.sender_thread.send(payload)
         except Exception:
             pass
 
@@ -661,6 +808,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         worker.completed.connect(on_done)
         worker.failed.connect(on_fail)
+        worker.finished.connect(lambda: setattr(self, "_avatar_worker", None))
         worker.start()
 
     def _choose_avatar(self, dialog):
@@ -691,70 +839,62 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.status_label.setText("")
 
         if not self.username:
-            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите логин")
+            QtWidgets.QMessageBox.warning(self, "??????", "??????? ?????")
             return
         if not self.password:
-            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите пароль")
+            QtWidgets.QMessageBox.warning(self, "??????", "??????? ??????")
             return
         if self.auth_mode == "register" and not self.email:
-            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите почту")
+            QtWidgets.QMessageBox.warning(self, "??????", "??????? ?????")
             return
 
         if not re.match(r'^[A-Za-z0-9_]+$', self.username):
-            QtWidgets.QMessageBox.warning(self, "Ошибка", "Допустимы латиница, цифры и _")
+            QtWidgets.QMessageBox.warning(self, "??????", "????????? ????????, ????? ? _")
             return
 
-        try:
-            self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.client_socket.connect((self.host, self.port))
+        self.connect_btn.setEnabled(False)
+        self.status_label.setText("???????????...")
 
-            login_data = json.dumps({
-                "action": self.auth_mode,
-                "username": self.username,
-                "password": self.password,
-                "email": self.email
-            }) + "\n"
+        self.auth_worker = AuthWorker(
+            self.host,
+            self.port,
+            self.username,
+            self.password,
+            self.email,
+            self.auth_mode
+        )
 
-            self.client_socket.send(login_data.encode())
-
-            buffer = ""
-            while "\n" not in buffer:
-                data = self.client_socket.recv(1024).decode()
-                if not data:
-                    raise Exception("Server closed")
-                buffer += data
-
-            line, rest = buffer.split("\n", 1)
-            resp = json.loads(line)
-
-            if resp.get("type") != "auth":
-                raise Exception("Auth failed")
-
-            if resp.get("status") == "need_code":
-                self.pending_socket = self.client_socket
-                self.status_label.setText("Код отправлен на почту")
+        def on_success(sock, rest_or_status):
+            self.connect_btn.setEnabled(True)
+            if rest_or_status == "need_code":
+                self.pending_socket = sock
+                self.status_label.setText("??? ????????? ?? ?????")
                 self.code_row.setVisible(True)
                 self.connect_btn.setEnabled(False)
                 return
 
-            if resp.get("status") != "ok":
-                msg = resp.get("message", "Не удалось войти")
-                self.client_socket.close()
-                QtWidgets.QMessageBox.critical(self, "Error", msg)
-                return
-
-            self.prebuffer = rest
+            self.client_socket = sock
+            self.prebuffer = rest_or_status
             self.running = True
-
             self.show_chat_screen()
+
+            self.sender_thread = SenderThread(self.client_socket)
+            self.sender_thread.error.connect(lambda _err: None)
+            self.sender_thread.start()
 
             self.receiver_thread = ReceiverThread(self.client_socket, self.prebuffer)
             self.receiver_thread.message_received.connect(self.display_message)
             self.receiver_thread.connection_lost.connect(self.connection_lost)
             self.receiver_thread.start()
 
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Ошибка", str(e))
+        def on_error(message):
+            self.connect_btn.setEnabled(True)
+            self.status_label.setText("")
+            QtWidgets.QMessageBox.critical(self, "??????", message)
+
+        self.auth_worker.success.connect(on_success)
+        self.auth_worker.error.connect(on_error)
+        self.auth_worker.start()
 
     def verify_code(self):
         code = self.code_input.text().strip()
@@ -813,7 +953,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if self.chat_mode == "dm" and self.dm_target:
                 payload["to"] = self.dm_target
             data = json.dumps(payload) + "\n"
-            self.client_socket.send(data.encode())
+            self._send_action(payload)
             self.message_input.clear()
         except Exception:
             QtWidgets.QMessageBox.critical(self, "Ошибка", "Не удалось отправить")
@@ -853,6 +993,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 if isinstance(profile, dict):
                     entry["nick"] = profile.get("nick", "")
                     entry["avatar"] = profile.get("avatar", "")
+                    avatar = profile.get("avatar", "")
+                    if avatar:
+                        self.avatar_cache[username] = avatar
+                        self._save_avatar_cache()
             dialog = self.profile_dialogs.get(username)
             if dialog and isinstance(profile, dict):
                 dialog.set_profile(profile)
@@ -1209,10 +1353,15 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 avatar = ""
             if not name:
                 continue
+            cached = self.avatar_cache.get(name, "")
+            if not avatar and cached:
+                avatar = cached
             self.user_directory[name] = {
                 "nick": nick,
                 "avatar": avatar
             }
+            if avatar:
+                self.avatar_cache[name] = avatar
             items.append({"username": name, "active": active})
 
         items.sort(key=lambda x: (not x["active"], self._display_name(x["username"]).casefold()))
@@ -1220,6 +1369,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.latest_users = items
         self._render_users_list()
         self._update_user_label()
+        self._save_avatar_cache()
 
     def _render_users_list(self):
         self.users_list.clear()
@@ -1345,16 +1495,40 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     # ================= DISCONNECT =================
 
+        for label in self.findChildren(AvatarLabel):
+            try:
+                label._stop_decode_thread()
+            except Exception:
+                pass
+        if getattr(self, "_avatar_worker", None) is not None:
+            try:
+                if self._avatar_worker.isRunning():
+                    self._avatar_worker.wait(2000)
+            except Exception:
+                pass
+            self._avatar_worker = None
+
     def disconnect(self):
         self.running = False
         if self.receiver_thread:
             self.receiver_thread.stop()
-            self.receiver_thread = None
+        if self.sender_thread:
+            self.sender_thread.stop()
         try:
             if self.client_socket:
+                try:
+                    self.client_socket.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
                 self.client_socket.close()
         except Exception:
             pass
+        if self.receiver_thread:
+            self.receiver_thread.wait(2000)
+            self.receiver_thread = None
+        if self.sender_thread:
+            self.sender_thread.wait(2000)
+            self.sender_thread = None
         self.show_login_screen()
 
     def connection_lost(self):
@@ -1367,12 +1541,23 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.running = False
         if self.receiver_thread:
             self.receiver_thread.stop()
-            self.receiver_thread = None
+        if self.sender_thread:
+            self.sender_thread.stop()
         try:
             if self.client_socket:
+                try:
+                    self.client_socket.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
                 self.client_socket.close()
         except Exception:
             pass
+        if self.receiver_thread:
+            self.receiver_thread.wait(2000)
+            self.receiver_thread = None
+        if self.sender_thread:
+            self.sender_thread.wait(2000)
+            self.sender_thread = None
         event.accept()
 
     def resizeEvent(self, event):
@@ -1389,4 +1574,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

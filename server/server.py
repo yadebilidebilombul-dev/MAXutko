@@ -425,8 +425,7 @@ class MAXutkoServer:
             users.append({
                 "username": name,
                 "active": name in active_users,
-                "nick": profile.get("nick", ""),
-                "avatar": profile.get("avatar", "")
+                "nick": profile.get("nick", "")
             })
 
         return {
