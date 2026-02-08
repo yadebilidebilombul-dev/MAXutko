@@ -17,7 +17,7 @@ from mailSystem.mailCla import MailSender, CodeGenerator, is_console_email
 
 class MAXutkoServer:
 
-    def __init__(self, host="0.0.0.0", port=5555):
+    def __init__(self, host="26.202.145.247", port=5555):
 
         self.host = host
         self.port = port
@@ -32,6 +32,12 @@ class MAXutkoServer:
 
         self.clients = {}        # socket -> username
         self.clients_lock = threading.Lock()
+
+        self.clans = ["Одмен", "Новичок", "Старик", "Старейшина", "Модер"]
+        self.primary_clans = {"Одмен", "Модер"}
+        self.secondary_clans = {"Новичок", "Старик", "Старейшина"}
+        self.clan_six_months_seconds = 6 * 30 * 24 * 60 * 60
+        self.clan_year_seconds = 365 * 24 * 60 * 60
 
         self.accounts_path = os.path.join(os.path.dirname(__file__), "accounts.json")
         self.accounts_lock = threading.Lock()
@@ -87,8 +93,18 @@ class MAXutkoServer:
             with open(self.accounts_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
+                changed = False
                 for name, item in data.items():
-                    data[name] = self._normalize_account(item)
+                    normalized, updated = self._normalize_account(item)
+                    data[name] = normalized
+                    if updated:
+                        changed = True
+                if changed:
+                    try:
+                        with open(self.accounts_path, "w", encoding="utf-8") as fw:
+                            json.dump(data, fw, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
                 return data
         except:
             pass
@@ -101,19 +117,90 @@ class MAXutkoServer:
                 "salt": "",
                 "hash": "",
                 "email": "",
-                "profile": {"nick": "", "about": "", "avatar": ""}
-            }
+                "profile": {"nick": "", "about": "", "avatar": "", "clan_primary": "", "clan_secondary": "Новичок"},
+                "registered_at": int(time.time())
+            }, True
+        changed = False
         profile = data.get("profile")
         if not isinstance(profile, dict):
             profile = {}
+            changed = True
         profile.setdefault("nick", "")
         profile.setdefault("about", "")
         profile.setdefault("avatar", "")
+        if "clan_primary" not in profile:
+            profile["clan_primary"] = ""
+            changed = True
+        if "clan_secondary" not in profile:
+            profile["clan_secondary"] = "Новичок"
+            changed = True
+        if "clan" in profile:
+            legacy = (profile.get("clan") or "").strip()
+            if legacy in self.primary_clans and not profile.get("clan_primary"):
+                profile["clan_primary"] = legacy
+                changed = True
+            if legacy in self.secondary_clans and not profile.get("clan_secondary"):
+                profile["clan_secondary"] = legacy
+                changed = True
+            profile.pop("clan", None)
+            changed = True
         data["profile"] = profile
         data.setdefault("salt", "")
         data.setdefault("hash", "")
         data.setdefault("email", "")
-        return data
+        if not isinstance(data.get("registered_at"), (int, float)) or data.get("registered_at", 0) <= 0:
+            data["registered_at"] = int(time.time())
+            changed = True
+        clan_changed = self._refresh_account_clan(data)
+        return data, changed or clan_changed
+
+    def _auto_clan_for_account(self, registered_at):
+        now = time.time()
+        age = max(0, now - registered_at)
+        if age >= self.clan_year_seconds:
+            return "Старейшина"
+        if age >= self.clan_six_months_seconds:
+            return "Старик"
+        return "Новичок"
+
+    def _get_account_clan(self, acc):
+        profile = acc.get("profile") or {}
+        clan = (profile.get("clan_primary") or "").strip()
+        if clan in self.primary_clans:
+            return clan
+        return ""
+
+    def _refresh_account_clan(self, acc):
+        if not isinstance(acc, dict):
+            return False
+        profile = acc.get("profile")
+        if not isinstance(profile, dict):
+            profile = {}
+        if "registered_at" not in acc or not isinstance(acc.get("registered_at"), (int, float)):
+            acc["registered_at"] = int(time.time())
+        current_secondary = (profile.get("clan_secondary") or "").strip()
+        if current_secondary not in self.secondary_clans:
+            current_secondary = ""
+        auto = self._auto_clan_for_account(acc.get("registered_at", int(time.time())))
+        if profile.get("clan_secondary") != auto:
+            profile["clan_secondary"] = auto
+            acc["profile"] = profile
+            return True
+        acc["profile"] = profile
+        return False
+
+    def _refresh_account_clan_for_user(self, username):
+        if not username:
+            return None
+        with self.accounts_lock:
+            acc = self.accounts.get(username)
+            if not acc:
+                return None
+            changed = self._refresh_account_clan(acc)
+            self.accounts[username] = acc
+            if changed:
+                self.save_accounts()
+            return acc
 
 
     def save_accounts(self):
@@ -196,7 +283,8 @@ class MAXutkoServer:
             "salt": salt,
             "hash": pw_hash,
             "email": email,
-            "profile": {"nick": "", "about": "", "avatar": ""}
+            "profile": {"nick": "", "about": "", "avatar": "", "clan_primary": "", "clan_secondary": "Новичок"},
+            "registered_at": int(time.time())
         }
         self.save_accounts()
 
@@ -292,6 +380,21 @@ class MAXutkoServer:
             with open(self.history_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
+                changed = False
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("type") != "message":
+                        continue
+                    if not item.get("id"):
+                        item["id"] = secrets.token_hex(12)
+                        changed = True
+                if changed:
+                    try:
+                        with open(self.history_path, "w", encoding="utf-8") as fw:
+                            json.dump(data, fw, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
                 return data
         except:
             pass
@@ -867,7 +970,8 @@ class MAXutkoServer:
                             "salt": pending["salt"],
                             "hash": pending["hash"],
                             "email": pending["email"],
-                            "profile": {"nick": "", "about": "", "avatar": ""}
+                            "profile": {"nick": "", "about": "", "avatar": "", "clan_primary": "", "clan_secondary": "Новичок"},
+                            "registered_at": int(time.time())
                         }
                         self.save_accounts()
 
@@ -1004,6 +1108,8 @@ class MAXutkoServer:
                 # token_login already validated
                 pass
 
+            self._refresh_account_clan_for_user(username)
+
             # ---- REGISTER CLIENT ----
 
             with self.clients_lock:
@@ -1068,12 +1174,11 @@ class MAXutkoServer:
                     if action:
                         if action == "get_profile":
                             target = (msg.get("username") or "").strip()
-                            with self.accounts_lock:
-                                acc = self.accounts.get(target)
-                                if acc:
-                                    profile = dict(acc.get("profile") or {})
-                                else:
-                                    profile = {"nick": "", "about": "", "avatar": ""}
+                            acc = self._refresh_account_clan_for_user(target)
+                            if acc:
+                                profile = dict(acc.get("profile") or {})
+                            else:
+                                profile = {"nick": "", "about": "", "avatar": "", "clan_primary": "", "clan_secondary": "Новичок"}
                             payload = {
                                 "type": "profile",
                                 "username": target,
@@ -1158,17 +1263,46 @@ class MAXutkoServer:
                             if target and isinstance(note, str):
                                 self.set_note(username, target, note[:1000])
                             continue
+                        if action == "set_clan":
+                            target = (msg.get("username") or "").strip()
+                            new_clan = (msg.get("clan") or "").strip()
+                            level = (msg.get("level") or "").strip().lower()
+                            if not target or not new_clan:
+                                continue
+                            requester = self._refresh_account_clan_for_user(username)
+                            if not requester:
+                                continue
+                            if self._get_account_clan(requester) != "Одмен":
+                                continue
+                            if level not in ("primary", "secondary"):
+                                level = "secondary"
+                            if len(new_clan) > 32:
+                                new_clan = new_clan[:32]
+                            with self.accounts_lock:
+                                acc = self.accounts.get(target)
+                                if not acc:
+                                    continue
+                                profile = dict(acc.get("profile") or {})
+                                if level == "primary":
+                                    profile["clan_primary"] = new_clan
+                                else:
+                                    profile["clan_secondary"] = new_clan
+                                acc["profile"] = profile
+                                self.accounts[target] = acc
+                                self.save_accounts()
+                            continue
 
                     text = msg.get("message")
                     target = msg.get("to", "").strip()
+                    reply_to = msg.get("reply_to")
 
                     if not text:
                         continue
 
                     if target:
-                        self.send_direct_message(username, target, text)
+                        self.send_direct_message(username, target, text, reply_to)
                     else:
-                        self.broadcast_message(username, text)
+                        self.broadcast_message(username, text, reply_to)
 
         except Exception as e:
 
@@ -1181,14 +1315,18 @@ class MAXutkoServer:
 
     # ================= BROADCAST =================
 
-    def broadcast_message(self, username, text):
+    def broadcast_message(self, username, text, reply_to=None):
 
+        msg_id = secrets.token_hex(12)
         data = {
+            "id": msg_id,
             "username": username,
             "message": text,
             "timestamp": datetime.now().strftime("%H:%M:%S"),
             "type": "message"
         }
+        if reply_to:
+            data["reply_to"] = reply_to
 
         self.append_history(data)
 
@@ -1213,7 +1351,7 @@ class MAXutkoServer:
         return None
 
 
-    def send_direct_message(self, sender, target, text):
+    def send_direct_message(self, sender, target, text, reply_to=None):
 
         self._add_contact_pair(sender, target)
         sender_sock = self._socket_by_username(sender)
@@ -1235,6 +1373,8 @@ class MAXutkoServer:
             "delivered": delivered,
             "read": False
         }
+        if reply_to:
+            data["reply_to"] = reply_to
 
         self.append_dm_history(dict(data))
 

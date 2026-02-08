@@ -1,8 +1,18 @@
 {
   "iwantriker": [
-    "test"
+    "test",
+    "VankaPidorTochkaChmo",
+    "denik"
   ],
   "test": [
+    "iwantriker",
+    "denik"
+  ],
+  "VankaPidorTochkaChmo": [
     "iwantriker"
+  ],
+  "denik": [
+    "iwantriker",
+    "test"
   ]
 }

@@ -25,6 +25,51 @@ QMainWindow, QStackedWidget {
     border-radius: 12px;
 }
 
+#selfAvatar {
+    background: #ffffff;
+    color: #9ca3af;
+    border: 1px solid #e5e7eb;
+    border-radius: 18px;
+}
+
+#userNameLabel {
+    color: #111827;
+    font-weight: 600;
+}
+
+#userMetaLabel {
+    color: #6b7280;
+    font-size: 9pt;
+}
+
+#clanPrimaryLabel {
+    color: #1d4ed8;
+    background: #dbeafe;
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-weight: 600;
+    font-size: 10.5pt;
+}
+
+#clanDotLabel {
+    color: #9ca3af;
+    font-weight: 700;
+}
+
+#clanSecondaryLabel {
+    color: #6b7280;
+    background: #e5e7eb;
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-weight: 600;
+    font-size: 9pt;
+}
+
+#chatTitle {
+    color: #111827;
+    font-weight: 600;
+}
+
 QLineEdit, QTextEdit {
     color: #111827;
     background: #ffffff;
@@ -184,6 +229,42 @@ QScrollArea {
 
 #messageMe QLabel {
     color: #ffffff;
+}
+
+#replyBar {
+    background: #ffffff;
+    border: 1px solid #dbeafe;
+    border-radius: 10px;
+}
+
+#replyMeta {
+    color: #2563eb;
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+#replyBody {
+    color: #6b7280;
+    font-size: 9pt;
+}
+
+#replyPreview {
+    background: #eef2ff;
+    border-left: 3px solid #2563eb;
+    border-radius: 10px;
+}
+
+#replyPreview QLabel {
+    background: transparent;
+}
+
+#messageMe #replyPreview {
+    background: #1e3a8a;
+    border-left: 3px solid #93c5fd;
+}
+
+#messageMe #replyPreview QLabel {
+    color: #e0e7ff;
 }
 
 #statusLabel {
