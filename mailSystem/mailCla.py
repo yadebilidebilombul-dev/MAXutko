@@ -4,6 +4,25 @@ import ssl
 import secrets
 from email.message import EmailMessage
 
+SwitchMail = False
+
+
+def _coerce_bool(value, default):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("1", "true", "yes", "y", "on"):
+            return True
+        if v in ("0", "false", "no", "n", "off"):
+            return False
+    return default
+
+
+def _default_switch_mail():
+    return _coerce_bool(os.getenv("SWITCH_MAIL"), SwitchMail)
 
 class CodeGenerator:
 
@@ -23,7 +42,8 @@ class MailSender:
         password=None,
         from_email=None,
         use_tls=True,
-        use_ssl=None
+        use_ssl=None,
+        SwitchMail=None
     ):
         self.smtp_host = smtp_host or os.getenv("SMTP_HOST", "smtp.yandex.ru")
         self.smtp_port = int(smtp_port or os.getenv("SMTP_PORT", "465"))
@@ -32,6 +52,9 @@ class MailSender:
         self.from_email = from_email or os.getenv("SMTP_FROM", self.username)
         self.use_tls = use_tls
         self.use_ssl = use_ssl
+        if SwitchMail is None:
+            SwitchMail = _default_switch_mail()
+        self.SwitchMail = bool(SwitchMail)
 
 
     def is_configured(self):
@@ -39,6 +62,10 @@ class MailSender:
 
 
     def send_code(self, to_email, code):
+
+        if not self.SwitchMail:
+            print(f"[MAIL] SwitchMail disabled. Code for {to_email}: {code}")
+            return True
 
         if not self.is_configured():
             print(f"[MAIL] SMTP not configured. Code for {to_email}: {code}")

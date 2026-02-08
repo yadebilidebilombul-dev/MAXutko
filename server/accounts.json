@@ -1,0 +1,12 @@
+{
+  "12": {
+    "salt": "378151ba975ea094bc9e0d6290178ece",
+    "hash": "4f6c9b02e98b182d497ecd22cbf233b7e150478bdf9b1780b9d1a1fc1a416754",
+    "email": "12@hdhs.com"
+  },
+  "123": {
+    "salt": "e230d94a93af6f47ec3407ece9c5d80c",
+    "hash": "b27d5845a4924dbbdd90cba2816698f9a2037f87acba4efc93fec6c42211fb95",
+    "email": "123@vdsvs.com"
+  }
+}
