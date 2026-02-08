@@ -278,10 +278,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.status_label.setText(status_text)
         self.stack.setCurrentWidget(self.login_page)
         self.message_input.clear()
+        self._clear_messages()
 
     def show_chat_screen(self):
         self.user_label.setText(f"{self.username} @ {self.host}:{self.port}")
         self.stack.setCurrentWidget(self.chat_page)
+        self._clear_messages()
 
     # ================= CONNECT =================
 
@@ -437,6 +439,13 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     # ================= DISPLAY =================
 
     def display_message(self, data):
+        if data.get("type") == "history":
+            items = data.get("items", [])
+            for item in items:
+                if isinstance(item, dict):
+                    self.display_message(item)
+            return
+
         user = data.get("username", "")
         text = data.get("message", "")
         time = data.get("timestamp", "")
@@ -499,6 +508,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _scroll_to_bottom(self):
         bar = self.scroll_area.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+    def _clear_messages(self):
+        count = self.messages_layout.count()
+        for i in range(count - 1):
+            item = self.messages_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
 
     def _message_widths(self, msg_type):
         viewport = self.scroll_area.viewport().width()

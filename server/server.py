@@ -37,6 +37,11 @@ class MAXutkoServer:
         self.accounts_lock = threading.Lock()
         self.accounts = self.load_accounts()
 
+        self.history_path = os.path.join(os.path.dirname(__file__), "history.json")
+        self.history_lock = threading.Lock()
+        self.history_limit = 5000
+        self.history = self.load_history()
+
         self.pending = {}  # username -> {email, salt, hash, code, expires_at}
         self.pending_lock = threading.Lock()
 
@@ -105,6 +110,51 @@ class MAXutkoServer:
         }
 
         client.send((json.dumps(data) + "\n").encode())
+
+    # ================= HISTORY =================
+
+    def load_history(self):
+
+        if not os.path.exists(self.history_path):
+            return []
+
+        try:
+            with open(self.history_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+        except:
+            pass
+
+        return []
+
+
+    def save_history(self):
+
+        with open(self.history_path, "w", encoding="utf-8") as f:
+            json.dump(self.history, f, ensure_ascii=False, indent=2)
+
+
+    def append_history(self, data):
+
+        with self.history_lock:
+            self.history.append(data)
+            if len(self.history) > self.history_limit:
+                self.history = self.history[-self.history_limit:]
+            self.save_history()
+
+
+    def send_history(self, client):
+
+        with self.history_lock:
+            items = list(self.history)
+
+        payload = {
+            "type": "history",
+            "items": items
+        }
+
+        client.send((json.dumps(payload) + "\n").encode())
 
 
     # ================= START =================
@@ -286,6 +336,8 @@ class MAXutkoServer:
 
             print(f"[+] {username} logged in")
 
+            self.send_history(client)
+
             self.send_system(f"{username} joined the chat")
 
             # ---- MAIN LOOP ----
@@ -335,6 +387,8 @@ class MAXutkoServer:
             "type": "message"
         }
 
+        self.append_history(data)
+
         raw = (json.dumps(data) + "\n").encode()
 
         with self.clients_lock:
@@ -355,6 +409,8 @@ class MAXutkoServer:
             "timestamp": "",
             "type": "system"
         }
+
+        self.append_history(data)
 
         raw = (json.dumps(data) + "\n").encode()
 
