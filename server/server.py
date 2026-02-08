@@ -42,6 +42,15 @@ class MAXutkoServer:
         self.history_limit = 5000
         self.history = self.load_history()
 
+        self.dm_history_path = os.path.join(os.path.dirname(__file__), "dm_history.json")
+        self.dm_history_lock = threading.Lock()
+        self.dm_history_limit = 20000
+        self.dm_history = self.load_dm_history()
+
+        self.receipts_path = os.path.join(os.path.dirname(__file__), "dm_receipts.json")
+        self.receipts_lock = threading.Lock()
+        self.receipts_pending = self.load_receipts()
+
         self.pending = {}  # username -> {email, salt, hash, code, expires_at}
         self.pending_lock = threading.Lock()
 
@@ -155,6 +164,215 @@ class MAXutkoServer:
         }
 
         client.send((json.dumps(payload) + "\n").encode())
+
+    # ================= DM HISTORY =================
+
+    def load_dm_history(self):
+
+        if not os.path.exists(self.dm_history_path):
+            return []
+
+        try:
+            with open(self.dm_history_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+        except:
+            pass
+
+        return []
+
+
+    def save_dm_history(self):
+
+        with open(self.dm_history_path, "w", encoding="utf-8") as f:
+            json.dump(self.dm_history, f, ensure_ascii=False, indent=2)
+
+
+    def append_dm_history(self, data):
+
+        with self.dm_history_lock:
+            self.dm_history.append(data)
+            if len(self.dm_history) > self.dm_history_limit:
+                self.dm_history = self.dm_history[-self.dm_history_limit:]
+            self.save_dm_history()
+
+
+    def _find_dm_by_id(self, msg_id):
+
+        for msg in self.dm_history:
+            if msg.get("id") == msg_id:
+                return msg
+        return None
+
+
+    def update_dm_status(self, msg_id, delivered=None, read=None):
+
+        with self.dm_history_lock:
+            msg = self._find_dm_by_id(msg_id)
+            if not msg:
+                return None
+            if delivered is not None:
+                msg["delivered"] = bool(delivered)
+            if read is not None:
+                msg["read"] = bool(read)
+            self.save_dm_history()
+            return dict(msg)
+
+
+    def send_dm_history(self, client, username):
+
+        to_notify = []
+        items = []
+
+        with self.dm_history_lock:
+            for msg in self.dm_history:
+                if msg.get("type") != "dm":
+                    continue
+                if msg.get("username") == username or msg.get("to") == username:
+                    if msg.get("to") == username and not msg.get("delivered", False):
+                        msg["delivered"] = True
+                        to_notify.append({
+                            "sender": msg.get("username"),
+                            "id": msg.get("id"),
+                            "delivered": True,
+                            "read": bool(msg.get("read", False))
+                        })
+                    items.append(dict(msg))
+            if to_notify:
+                self.save_dm_history()
+
+        payload = {
+            "type": "dm_history",
+            "items": items
+        }
+        try:
+            client.send((json.dumps(payload) + "\n").encode())
+        except:
+            pass
+
+        for item in to_notify:
+            sender = item.get("sender")
+            if sender:
+                self.send_dm_receipt(sender, item.get("id"), item.get("delivered"), item.get("read"))
+
+    # ================= RECEIPTS =================
+
+    def load_receipts(self):
+
+        if not os.path.exists(self.receipts_path):
+            return {}
+
+        try:
+            with open(self.receipts_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except:
+            pass
+
+        return {}
+
+
+    def save_receipts(self):
+
+        with open(self.receipts_path, "w", encoding="utf-8") as f:
+            json.dump(self.receipts_pending, f, ensure_ascii=False, indent=2)
+
+
+    def send_dm_receipt(self, username, msg_id, delivered=None, read=None):
+
+        if not msg_id:
+            return
+
+        payload = {
+            "type": "dm_receipt",
+            "id": msg_id
+        }
+        if delivered is not None:
+            payload["delivered"] = bool(delivered)
+        if read is not None:
+            payload["read"] = bool(read)
+
+        target_sock = self._socket_by_username(username)
+        if target_sock:
+            try:
+                target_sock.send((json.dumps(payload) + "\n").encode())
+            except:
+                pass
+            return
+
+        with self.receipts_lock:
+            user_receipts = self.receipts_pending.setdefault(username, {})
+            existing = user_receipts.get(msg_id, {})
+            if delivered is not None:
+                existing["delivered"] = bool(delivered)
+            if read is not None:
+                existing["read"] = bool(read)
+            user_receipts[msg_id] = existing
+            self.save_receipts()
+
+
+    def send_pending_receipts(self, client, username):
+
+        with self.receipts_lock:
+            items = self.receipts_pending.pop(username, {})
+            if items:
+                self.save_receipts()
+
+        for msg_id, status in items.items():
+            payload = {
+                "type": "dm_receipt",
+                "id": msg_id
+            }
+            if "delivered" in status:
+                payload["delivered"] = bool(status["delivered"])
+            if "read" in status:
+                payload["read"] = bool(status["read"])
+            try:
+                client.send((json.dumps(payload) + "\n").encode())
+            except:
+                pass
+    # ================= USERS =================
+
+    def _build_users_payload(self):
+        with self.accounts_lock:
+            all_users = set(self.accounts.keys())
+
+        with self.clients_lock:
+            active_users = set(self.clients.values())
+
+        all_users |= active_users
+
+        users = []
+        for name in all_users:
+            users.append({
+                "username": name,
+                "active": name in active_users
+            })
+
+        return {
+            "type": "users",
+            "users": users
+        }
+
+    def send_user_list(self, target_client=None):
+        payload = self._build_users_payload()
+        raw = (json.dumps(payload) + "\n").encode()
+
+        if target_client is not None:
+            try:
+                target_client.send(raw)
+            except:
+                pass
+            return
+
+        with self.clients_lock:
+            for c in list(self.clients.keys()):
+                try:
+                    c.send(raw)
+                except:
+                    pass
 
 
     # ================= START =================
@@ -337,8 +555,12 @@ class MAXutkoServer:
             print(f"[+] {username} logged in")
 
             self.send_history(client)
+            self.send_dm_history(client, username)
+            self.send_pending_receipts(client, username)
+            self.send_user_list(client)
 
             self.send_system(f"{username} joined the chat")
+            self.send_user_list()
 
             # ---- MAIN LOOP ----
 
@@ -360,12 +582,22 @@ class MAXutkoServer:
 
                     msg = json.loads(line)
 
+                    msg_type = msg.get("type")
+                    if msg_type == "dm_read":
+                        msg_id = msg.get("id", "")
+                        self.mark_dm_read(username, msg_id)
+                        continue
+
                     text = msg.get("message")
+                    target = msg.get("to", "").strip()
 
                     if not text:
                         continue
 
-                    self.broadcast_message(username, text)
+                    if target:
+                        self.send_direct_message(username, target, text)
+                    else:
+                        self.broadcast_message(username, text)
 
         except Exception as e:
 
@@ -399,6 +631,71 @@ class MAXutkoServer:
                     c.send(raw)
                 except:
                     pass
+
+
+    def _socket_by_username(self, username):
+
+        with self.clients_lock:
+            for sock, name in self.clients.items():
+                if name == username:
+                    return sock
+        return None
+
+
+    def send_direct_message(self, sender, target, text):
+
+        msg_id = secrets.token_hex(12)
+        delivered = self._socket_by_username(target) is not None
+        data = {
+            "id": msg_id,
+            "username": sender,
+            "to": target,
+            "message": text,
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "type": "dm",
+            "delivered": delivered,
+            "read": False
+        }
+
+        self.append_dm_history(dict(data))
+
+        raw = (json.dumps(data) + "\n").encode()
+
+        target_sock = self._socket_by_username(target)
+        sender_sock = self._socket_by_username(sender)
+
+        if target_sock:
+            try:
+                target_sock.send(raw)
+            except:
+                pass
+        if sender_sock:
+            try:
+                sender_sock.send(raw)
+            except:
+                pass
+
+
+    def mark_dm_read(self, username, msg_id):
+
+        if not msg_id:
+            return
+
+        with self.dm_history_lock:
+            msg = self._find_dm_by_id(msg_id)
+            if not msg:
+                return
+            if msg.get("to") != username:
+                return
+            if msg.get("read"):
+                return
+            msg["read"] = True
+            self.save_dm_history()
+            updated = dict(msg)
+
+        sender = updated.get("username")
+        if sender:
+            self.send_dm_receipt(sender, updated.get("id"), updated.get("delivered"), True)
 
 
     def send_system(self, text):
@@ -445,6 +742,7 @@ class MAXutkoServer:
         print(f"[-] {username} disconnected")
 
         self.send_system(f"{username} left the chat")
+        self.send_user_list()
 
 
 # ================= MAIN =================

@@ -35,7 +35,8 @@ QLineEdit, QTextEdit {
 }
 
 #inputArea {
-    min-height: 70px;
+    min-height: 48px;
+    max-height: 48px;
 }
 
 QPushButton#primaryButton {
@@ -47,6 +48,18 @@ QPushButton#primaryButton {
 
 QPushButton#primaryButton:hover {
     background: #7dd3fc;
+}
+
+QPushButton#ghostButton {
+    background: #0b1220;
+    color: #e5e7eb;
+    border: 1px solid #1f2937;
+    border-radius: 8px;
+    padding: 6px 14px;
+}
+
+QPushButton#ghostButton:hover {
+    background: #111827;
 }
 
 QPushButton#dangerButton {
@@ -75,6 +88,57 @@ QScrollArea::viewport {
 
 #messagesContainer {
     background: #0b1220;
+}
+
+#usersPanel {
+    background: #0f172a;
+    border: 1px solid #111827;
+    border-radius: 10px;
+}
+
+#usersTitle {
+    color: #e5e7eb;
+    font-weight: 600;
+}
+
+#usersList {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+#usersList::item {
+    padding: 4px 2px;
+}
+
+#usersList::item:selected {
+    background: transparent;
+}
+
+#userRow {
+    background: transparent;
+}
+
+#userNameActive {
+    color: #22c55e;
+}
+
+#userNameInactive {
+    color: #94a3b8;
+}
+
+#unreadBadge {
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 20px;
+    max-height: 20px;
+    padding: 0px;
+    border-radius: 10px;
+    margin: 0px;
+    background: #38bdf8;
+    color: #0b1220;
+    font-weight: 600;
+    qproperty-alignment: 'AlignCenter';
 }
 
 #messageMe {

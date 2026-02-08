@@ -142,5 +142,719 @@
     "message": "fbfd",
     "timestamp": "14:11:44",
     "type": "message"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "111",
+    "message": "n",
+    "timestamp": "14:19:12",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "gf",
+    "timestamp": "14:19:12",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ng",
+    "timestamp": "14:19:12",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "fn",
+    "timestamp": "14:19:12",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "fn",
+    "timestamp": "14:19:12",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "gfn",
+    "timestamp": "14:19:13",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "gf",
+    "timestamp": "14:19:13",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ng",
+    "timestamp": "14:19:13",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "n",
+    "timestamp": "14:19:15",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "fgn",
+    "timestamp": "14:19:15",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "fg",
+    "timestamp": "14:19:15",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "прив чодел",
+    "timestamp": "14:19:20",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "fnа",
+    "timestamp": "14:19:23",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "даничо",
+    "timestamp": "14:19:26",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "авыавыа",
+    "timestamp": "14:19:30",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "вы",
+    "timestamp": "14:19:30",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "авы",
+    "timestamp": "14:19:32",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "иваив",
+    "timestamp": "14:19:35",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "иваиаива",
+    "timestamp": "14:19:41",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "иав",
+    "timestamp": "14:19:41",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "ива",
+    "timestamp": "14:19:41",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "аа",
+    "timestamp": "14:19:45",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "ипи",
+    "timestamp": "14:19:48",
+    "type": "message"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "111",
+    "message": "миавы",
+    "timestamp": "14:25:07",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "иваы",
+    "timestamp": "14:25:07",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ркартв",
+    "timestamp": "14:25:07",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ыфи",
+    "timestamp": "14:25:07",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ва",
+    "timestamp": "14:25:07",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "и",
+    "timestamp": "14:25:07",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "аива",
+    "timestamp": "14:25:08",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "иаи",
+    "timestamp": "14:25:08",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "авиив",
+    "timestamp": "14:25:08",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "апи",
+    "timestamp": "14:25:08",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "птваптпа",
+    "timestamp": "14:25:09",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "таптпаттпа",
+    "timestamp": "14:25:10",
+    "type": "message"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "111",
+    "message": "ип",
+    "timestamp": "14:30:41",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ип",
+    "timestamp": "14:30:41",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "и",
+    "timestamp": "14:30:41",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "паи",
+    "timestamp": "14:30:41",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "апии",
+    "timestamp": "14:30:42",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "па",
+    "timestamp": "14:30:43",
+    "type": "message"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "iwanm12",
+    "message": "тАПтат",
+    "timestamp": "14:51:20",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "ат",
+    "timestamp": "14:51:20",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "апт",
+    "timestamp": "14:51:20",
+    "type": "message"
+  },
+  {
+    "username": "iwanm12",
+    "message": "пат",
+    "timestamp": "14:51:20",
+    "type": "message"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "111",
+    "message": "мв",
+    "timestamp": "15:06:48",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "эм",
+    "timestamp": "15:06:48",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ыв",
+    "timestamp": "15:06:48",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "мывм",
+    "timestamp": "15:06:49",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "м",
+    "timestamp": "15:06:49",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "вым",
+    "timestamp": "15:06:49",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "м",
+    "timestamp": "15:06:49",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ыв",
+    "timestamp": "15:06:50",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "м",
+    "timestamp": "15:06:50",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ывм",
+    "timestamp": "15:06:50",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "вымы",
+    "timestamp": "15:06:50",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "в",
+    "timestamp": "15:06:50",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "мыв",
+    "timestamp": "15:06:50",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "м",
+    "timestamp": "15:06:51",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ыв",
+    "timestamp": "15:06:51",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "мв",
+    "timestamp": "15:06:51",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "м",
+    "timestamp": "15:06:51",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ывм",
+    "timestamp": "15:06:51",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ывм",
+    "timestamp": "15:06:51",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ывм",
+    "timestamp": "15:06:52",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "вым",
+    "timestamp": "15:06:52",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ыв",
+    "timestamp": "15:06:52",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "мыв",
+    "timestamp": "15:06:52",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "м",
+    "timestamp": "15:06:52",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "вым",
+    "timestamp": "15:06:52",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "вым",
+    "timestamp": "15:06:52",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "в",
+    "timestamp": "15:06:52",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "мвм",
+    "timestamp": "15:06:53",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "вм",
+    "timestamp": "15:06:53",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "вм",
+    "timestamp": "15:06:53",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "ыв",
+    "timestamp": "15:06:53",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "м",
+    "timestamp": "15:06:53",
+    "type": "message"
+  },
+  {
+    "username": "111",
+    "message": "мвы",
+    "timestamp": "15:06:53",
+    "type": "message"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwanm12 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "111 joined the chat",
+    "timestamp": "",
+    "type": "system"
   }
 ]

@@ -5,6 +5,9 @@ import json
 import re
 from PyQt5 import QtCore, QtWidgets, QtGui
 
+SERVER_HOST = "127.0.0.1"
+SERVER_PORT = 5555
+
 
 class ReceiverThread(QtCore.QThread):
     message_received = QtCore.pyqtSignal(dict)
@@ -63,14 +66,20 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.running = False
         self.prebuffer = ""
 
-        self.host = "127.0.0.1"
-        self.port = 5555
+        self.host = SERVER_HOST
+        self.port = SERVER_PORT
         self.username = ""
         self.password = ""
         self.email = ""
         self.auth_mode = "login"
         self.pending_socket = None
         self.receiver_thread = None
+        self.chat_mode = "group"
+        self.dm_target = None
+        self.conversations = {"group": []}
+        self.message_index = {}
+        self.unread_counts = {}
+        self.latest_users = []
 
         self.setup_ui()
         self.show_login_screen()
@@ -143,15 +152,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.email_input.setObjectName("input")
         email_layout.addWidget(self._labeled("Email:", self.email_input))
 
-        # Server
-        self.server_input = QtWidgets.QLineEdit("127.0.0.1:5555")
-        self.server_input.setPlaceholderText("host:port")
-        self.server_input.setObjectName("input")
-
         card_layout.addWidget(self._labeled("Username:", self.username_input))
         card_layout.addWidget(self._labeled("Password:", self.password_input))
         card_layout.addWidget(self.email_row)
-        card_layout.addWidget(self._labeled("Server:", self.server_input))
 
         # Mode
         mode_row = QtWidgets.QWidget()
@@ -218,6 +221,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.user_label = QtWidgets.QLabel("")
         self.user_label.setObjectName("mutedLabel")
         top_layout.addWidget(self.user_label)
+
+        self.chat_label = QtWidgets.QLabel("")
+        self.chat_label.setObjectName("mutedLabel")
+        top_layout.addWidget(self.chat_label)
+
+        self.back_btn = QtWidgets.QPushButton("Back to chat")
+        self.back_btn.setObjectName("ghostButton")
+        self.back_btn.clicked.connect(self.back_to_group)
+        self.back_btn.setVisible(False)
+        top_layout.addWidget(self.back_btn)
+
         top_layout.addStretch(1)
 
         self.disconnect_btn = QtWidgets.QPushButton("Disconnect")
@@ -226,6 +240,35 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         top_layout.addWidget(self.disconnect_btn)
 
         layout.addWidget(top_bar)
+
+        # Center area (messages + users)
+        center = QtWidgets.QWidget()
+        center_layout = QtWidgets.QHBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(10)
+
+        # Users panel
+        self.users_panel = QtWidgets.QFrame()
+        self.users_panel.setObjectName("usersPanel")
+        self.users_panel.setFixedWidth(200)
+        users_layout = QtWidgets.QVBoxLayout(self.users_panel)
+        users_layout.setContentsMargins(10, 10, 10, 10)
+        users_layout.setSpacing(8)
+
+        users_title = QtWidgets.QLabel("Users")
+        users_title.setObjectName("usersTitle")
+        users_layout.addWidget(users_title)
+
+        self.users_list = QtWidgets.QListWidget()
+        self.users_list.setObjectName("usersList")
+        self.users_list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.users_list.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.users_list.itemDoubleClicked.connect(self.open_direct_chat)
+        self.users_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.users_list.customContextMenuRequested.connect(self.show_user_menu)
+        users_layout.addWidget(self.users_list, 1)
+
+        center_layout.addWidget(self.users_panel)
 
         # Messages
         self.scroll_area = QtWidgets.QScrollArea()
@@ -240,7 +283,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.messages_layout.addStretch(1)
 
         self.scroll_area.setWidget(self.messages_widget)
-        layout.addWidget(self.scroll_area, 1)
+        center_layout.addWidget(self.scroll_area, 1)
+        layout.addWidget(center, 1)
 
         # Bottom
         bottom = QtWidgets.QWidget()
@@ -250,7 +294,6 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         self.message_input = MessageInput()
         self.message_input.setObjectName("inputArea")
-        self.message_input.setFixedHeight(70)
         self.message_input.send_requested.connect(self.send_message)
 
         self.send_btn = QtWidgets.QPushButton("Send")
@@ -279,11 +322,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.stack.setCurrentWidget(self.login_page)
         self.message_input.clear()
         self._clear_messages()
+        self.chat_mode = "group"
+        self.dm_target = None
+        self.conversations = {"group": []}
+        self.message_index = {}
+        self.unread_counts = {}
+        self.latest_users = []
 
     def show_chat_screen(self):
         self.user_label.setText(f"{self.username} @ {self.host}:{self.port}")
         self.stack.setCurrentWidget(self.chat_page)
-        self._clear_messages()
+        self.set_chat_mode("group")
 
     # ================= CONNECT =================
 
@@ -298,7 +347,6 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.username = self.username_input.text().strip()
         self.password = self.password_input.text().strip()
         self.email = self.email_input.text().strip()
-        server = self.server_input.text().strip()
         self.status_label.setText("")
 
         if not self.username:
@@ -313,14 +361,6 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         if not re.match(r'^[A-Za-z0-9_]+$', self.username):
             QtWidgets.QMessageBox.warning(self, "Error", "Only latin, numbers and _")
-            return
-
-        try:
-            host, port = server.split(":")
-            self.host = host
-            self.port = int(port)
-        except Exception:
-            QtWidgets.QMessageBox.critical(self, "Error", "Wrong server format")
             return
 
         try:
@@ -428,9 +468,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return
 
         try:
-            data = json.dumps({
-                "message": msg
-            }) + "\n"
+            payload = {"message": msg}
+            if self.chat_mode == "dm" and self.dm_target:
+                payload["to"] = self.dm_target
+            data = json.dumps(payload) + "\n"
             self.client_socket.send(data.encode())
             self.message_input.clear()
         except Exception:
@@ -445,6 +486,35 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 if isinstance(item, dict):
                     self.display_message(item)
             return
+        if data.get("type") == "dm_history":
+            items = data.get("items", [])
+            for item in items:
+                if isinstance(item, dict):
+                    self._store_message(item)
+            self._rebuild_unread_counts()
+            if self.latest_users:
+                self._render_users_list()
+            if self.chat_mode == "dm":
+                self._render_conversation()
+                self._send_read_receipts_for_current()
+            return
+        if data.get("type") == "dm_receipt":
+            self._apply_receipt(data)
+            return
+        if data.get("type") == "users":
+            self._update_users(data.get("users", []))
+            return
+        self._store_message(data)
+        if self._should_render(data):
+            self._render_message(data)
+            if data.get("type") == "dm":
+                self._maybe_send_read_receipt(data)
+        else:
+            if data.get("type") == "dm":
+                self._maybe_increment_unread(data)
+        return
+
+    def _render_message(self, data):
 
         user = data.get("username", "")
         text = data.get("message", "")
@@ -467,8 +537,19 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         else:
             is_me = user == self.username
             msg_widget.setObjectName("messageMe" if is_me else "messageOther")
-            name = "You" if is_me else user
-            meta = QtWidgets.QLabel(f"{name} • {time}")
+            if tp == "dm":
+                if is_me:
+                    name = f"You → {data.get('to', '')}".strip()
+                else:
+                    name = f"{user} → You"
+            else:
+                name = "You" if is_me else user
+            meta_text = f"{name} • {time}".strip()
+            if tp == "dm" and is_me:
+                status = self._dm_status_text(data)
+                if status:
+                    meta_text = f"{meta_text} • {status}".strip()
+            meta = QtWidgets.QLabel(meta_text)
             meta.setObjectName("mutedLabel")
             body = QtWidgets.QLabel(text)
             body.setWordWrap(True)
@@ -504,6 +585,288 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.messages_widget.adjustSize()
         QtCore.QTimer.singleShot(0, self._scroll_to_bottom)
         QtCore.QTimer.singleShot(50, self._scroll_to_bottom)
+
+    def _conversation_key_for_dm(self, data):
+        sender = data.get("username", "")
+        target = data.get("to", "")
+        if sender == self.username:
+            other = target
+        else:
+            other = sender
+        return f"dm:{other}" if other else None
+
+    def _store_message(self, data):
+        tp = data.get("type", "message")
+        if tp == "dm":
+            msg_id = data.get("id")
+            if msg_id:
+                existing = self.message_index.get(msg_id)
+                if existing:
+                    existing.update(data)
+                    return
+            key = self._conversation_key_for_dm(data)
+            if not key:
+                return
+            msg_copy = dict(data)
+            self.conversations.setdefault(key, []).append(msg_copy)
+            if msg_id:
+                self.message_index[msg_id] = msg_copy
+            return
+        self.conversations["group"].append(data)
+
+    def _should_render(self, data):
+        tp = data.get("type", "message")
+        if tp == "dm":
+            if self.chat_mode != "dm" or not self.dm_target:
+                return False
+            return self._conversation_key_for_dm(data) == f"dm:{self.dm_target}"
+        return self.chat_mode == "group"
+
+    def _render_conversation(self):
+        self._clear_messages()
+        if self.chat_mode == "group":
+            items = self.conversations.get("group", [])
+        else:
+            items = self.conversations.get(f"dm:{self.dm_target}", [])
+        for item in items:
+            self._render_message(item)
+
+    def set_chat_mode(self, mode, target=None):
+        if mode not in ("group", "dm"):
+            return
+        self.chat_mode = mode
+        self.dm_target = target if mode == "dm" else None
+        if mode == "group":
+            self.chat_label.setText("General chat")
+            self.back_btn.setVisible(False)
+        else:
+            self.chat_label.setText(f"Direct: {self.dm_target}")
+            self.back_btn.setVisible(True)
+        self._render_conversation()
+        if self.chat_mode == "dm":
+            self._clear_unread(self.dm_target)
+            self._send_read_receipts_for_current()
+
+    def open_direct_chat(self, item):
+        if not item:
+            return
+        target = (item.data(QtCore.Qt.UserRole) or "").strip()
+        if not target or target == self.username:
+            return
+        self.set_chat_mode("dm", target)
+
+    def back_to_group(self):
+        self.set_chat_mode("group")
+
+    def show_user_menu(self, pos):
+        item = self.users_list.itemAt(pos)
+        if not item:
+            return
+        username = (item.data(QtCore.Qt.UserRole) or "").strip()
+        if not username:
+            return
+
+        menu = QtWidgets.QMenu(self)
+
+        direct_action = QtWidgets.QAction("Direct (ЛС)", self)
+        direct_action.setEnabled(username != self.username)
+        direct_action.triggered.connect(lambda: self.set_chat_mode("dm", username))
+        menu.addAction(direct_action)
+
+        profile_action = QtWidgets.QAction("Открыть профиль", self)
+        profile_action.triggered.connect(lambda: self.show_profile(username))
+        menu.addAction(profile_action)
+
+        menu.exec_(self.users_list.mapToGlobal(pos))
+
+    def show_profile(self, username):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Профиль")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(320)
+
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QtWidgets.QLabel(username)
+        title_font = QtGui.QFont("Segoe UI", 14, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        about = QtWidgets.QLabel("О себе: пока что заготовка")
+        about.setWordWrap(True)
+        about.setObjectName("mutedLabel")
+        layout.addWidget(about)
+
+        close_btn = QtWidgets.QPushButton("Закрыть")
+        close_btn.setObjectName("primaryButton")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn, 0, QtCore.Qt.AlignRight)
+
+        dialog.exec_()
+
+    def _dm_status_text(self, data):
+        delivered = bool(data.get("delivered", False))
+        read = bool(data.get("read", False))
+        if read:
+            return "✓✓ прочитано"
+        if delivered:
+            return "✓✓ доставлено"
+        return "✓ отправлено"
+
+    def _apply_receipt(self, data):
+        msg_id = data.get("id")
+        if not msg_id:
+            return
+        msg = self.message_index.get(msg_id)
+        if not msg:
+            return
+        if "delivered" in data:
+            msg["delivered"] = bool(data.get("delivered"))
+        if "read" in data:
+            msg["read"] = bool(data.get("read"))
+        if self.chat_mode == "dm":
+            key = self._conversation_key_for_dm(msg)
+            if key == f"dm:{self.dm_target}":
+                self._render_conversation()
+
+    def _rebuild_unread_counts(self):
+        self.unread_counts = {}
+        for key, items in self.conversations.items():
+            if not key.startswith("dm:"):
+                continue
+            for item in items:
+                if item.get("type") != "dm":
+                    continue
+                if item.get("to") != self.username:
+                    continue
+                if item.get("read"):
+                    continue
+                sender = item.get("username")
+                if not sender:
+                    continue
+                self.unread_counts[sender] = self.unread_counts.get(sender, 0) + 1
+        if self.chat_mode == "dm" and self.dm_target:
+            self.unread_counts[self.dm_target] = 0
+
+    def _maybe_increment_unread(self, data):
+        if data.get("type") != "dm":
+            return
+        if data.get("to") != self.username:
+            return
+        sender = data.get("username")
+        if not sender or sender == self.username:
+            return
+        if self.chat_mode == "dm" and self.dm_target == sender:
+            return
+        if data.get("read"):
+            return
+        self.unread_counts[sender] = self.unread_counts.get(sender, 0) + 1
+        if self.latest_users:
+            self._render_users_list()
+
+    def _clear_unread(self, username):
+        if not username:
+            return
+        if self.unread_counts.get(username):
+            self.unread_counts[username] = 0
+            if self.latest_users:
+                self._render_users_list()
+
+    def _send_read_receipt(self, msg_id):
+        if not msg_id:
+            return
+        try:
+            payload = {
+                "type": "dm_read",
+                "id": msg_id
+            }
+            self.client_socket.send((json.dumps(payload) + "\n").encode())
+        except Exception:
+            pass
+
+    def _maybe_send_read_receipt(self, data):
+        if self.chat_mode != "dm" or self.dm_target != data.get("username"):
+            return
+        msg_id = data.get("id")
+        if not msg_id:
+            return
+        if data.get("read"):
+            return
+        if data.get("username") == self.username:
+            return
+        data["read"] = True
+        self._send_read_receipt(msg_id)
+
+    def _send_read_receipts_for_current(self):
+        if self.chat_mode != "dm" or not self.dm_target:
+            return
+        items = self.conversations.get(f"dm:{self.dm_target}", [])
+        for item in items:
+            if item.get("username") == self.username:
+                continue
+            if item.get("read"):
+                continue
+            msg_id = item.get("id")
+            if not msg_id:
+                continue
+            item["read"] = True
+            self._send_read_receipt(msg_id)
+
+    def _update_users(self, users):
+        items = []
+        for u in users:
+            if isinstance(u, dict):
+                name = u.get("username", "")
+                active = bool(u.get("active"))
+            else:
+                name = str(u)
+                active = False
+            name = name.strip()
+            if not name:
+                continue
+            items.append((name, active))
+
+        items.sort(key=lambda x: (not x[1], x[0].casefold()))
+
+        self.latest_users = items
+        self._render_users_list()
+
+    def _render_users_list(self):
+        self.users_list.clear()
+        for name, active in self.latest_users:
+            item = QtWidgets.QListWidgetItem()
+            item.setData(QtCore.Qt.UserRole, name)
+            item.setSizeHint(QtCore.QSize(0, 36))
+            self.users_list.addItem(item)
+
+            row = QtWidgets.QWidget(self.users_list)
+            row.setObjectName("userRow")
+            row_layout = QtWidgets.QHBoxLayout(row)
+            row_layout.setContentsMargins(6, 8, 6, 8)
+            row_layout.setSpacing(6)
+
+            name_label = QtWidgets.QLabel(row)
+            metrics = QtGui.QFontMetrics(name_label.font())
+            elided = metrics.elidedText(name, QtCore.Qt.ElideRight, 120)
+            name_label.setText(elided)
+            name_label.setObjectName("userNameActive" if active else "userNameInactive")
+            if active:
+                font = name_label.font()
+                font.setBold(True)
+                name_label.setFont(font)
+            row_layout.addWidget(name_label, 1)
+
+            count = self.unread_counts.get(name, 0)
+            badge = QtWidgets.QLabel(row)
+            badge.setText(str(count))
+            badge.setObjectName("unreadBadge")
+            badge.setFixedSize(20, 20)
+            badge.setVisible(count > 0)
+            row_layout.addWidget(badge, 0, QtCore.Qt.AlignRight)
+
+            self.users_list.setItemWidget(item, row)
 
     def _scroll_to_bottom(self):
         bar = self.scroll_area.verticalScrollBar()
