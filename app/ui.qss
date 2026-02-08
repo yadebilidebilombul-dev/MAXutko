@@ -1,0 +1,118 @@
+﻿QWidget {
+    background: #0b1220;
+    color: #e5e7eb;
+    font-family: "Segoe UI";
+    font-size: 10pt;
+}
+
+QMainWindow, QStackedWidget {
+    background: #0b1220;
+}
+
+#loginCard {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+}
+
+#titleLabel {
+    color: #38bdf8;
+}
+
+#topBar {
+    background: #0f172a;
+    border: 1px solid #111827;
+    border-radius: 10px;
+}
+
+QLineEdit, QTextEdit {
+    color: #e5e7eb;
+    background: #0f172a;
+    border: 1px solid #1f2937;
+    border-radius: 8px;
+    padding: 6px 8px;
+    selection-background-color: #38bdf8;
+}
+
+#inputArea {
+    min-height: 70px;
+}
+
+QPushButton#primaryButton {
+    background: #38bdf8;
+    color: #0b1220;
+    border-radius: 8px;
+    padding: 8px 18px;
+}
+
+QPushButton#primaryButton:hover {
+    background: #7dd3fc;
+}
+
+QPushButton#dangerButton {
+    background: #ef4444;
+    color: #ffffff;
+    border-radius: 8px;
+    padding: 6px 14px;
+}
+
+QPushButton#dangerButton:hover {
+    background: #f87171;
+}
+
+QRadioButton {
+    spacing: 8px;
+    color: #e5e7eb;
+}
+
+QScrollArea {
+    border: none;
+    background: #0b1220;
+}
+QScrollArea::viewport {
+    background: #0b1220;
+}
+
+#messagesContainer {
+    background: #0b1220;
+}
+
+#messageMe {
+    background: #1d4ed8;
+    border-radius: 12px;
+    padding: 8px 10px;
+}
+
+#messageOther {
+    background: #1f2937;
+    border-radius: 12px;
+    padding: 8px 10px;
+}
+
+#messageSystem {
+    background: #334155;
+    border-radius: 10px;
+    padding: 6px 10px;
+}
+
+#messageMe QLabel,
+#messageOther QLabel,
+#messageSystem QLabel {
+    background: transparent;
+    color: #e5e7eb;
+}
+
+#statusLabel {
+    color: #38bdf8;
+}
+
+#mutedLabel {
+    color: #94a3b8;
+}
+QLineEdit::placeholder {
+    color: #94a3b8;
+}
+
+QPushButton {
+    color: #e5e7eb;
+}
