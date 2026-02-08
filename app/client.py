@@ -25,7 +25,7 @@ class AuthWorker(QtCore.QThread):
     success = QtCore.pyqtSignal(object, dict, str)
     error = QtCore.pyqtSignal(str)
 
-    def __init__(self, host, port, username, password, email, mode, token=""):
+    def __init__(self, host, port, username, password, email, mode, token="", passcode=""):
         super().__init__()
         self.host = host
         self.port = port
@@ -34,6 +34,7 @@ class AuthWorker(QtCore.QThread):
         self.email = email
         self.mode = mode
         self.token = token
+        self.passcode = passcode
 
     def run(self):
         try:
@@ -44,7 +45,8 @@ class AuthWorker(QtCore.QThread):
                 "username": self.username,
                 "password": self.password,
                 "email": self.email,
-                "token": self.token
+                "token": self.token,
+                "passcode": self.passcode
             }) + "\n"
             sock.send(login_data.encode())
 
@@ -618,6 +620,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self._reset_pending_code = ""
         self._reset_pending_username = ""
         self._reset_pending_email = ""
+        self._passcode_waiting_mode = ""
+        self._passcode_verified_mode = ""
         self.chat_mode = "group"
         self.dm_target = None
         self.conversations = {"group": []}
@@ -713,6 +717,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         root_layout = QtWidgets.QVBoxLayout(self.login_page)
         root_layout.setAlignment(QtCore.Qt.AlignCenter)
 
+        self.login_content = QtWidgets.QWidget()
+        content_layout = QtWidgets.QVBoxLayout(self.login_content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        content_layout.setAlignment(QtCore.Qt.AlignCenter)
+
         card = QtWidgets.QFrame()
         card.setObjectName("loginCard")
         card_layout = QtWidgets.QVBoxLayout(card)
@@ -788,6 +798,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         reset_row = QtWidgets.QHBoxLayout()
         reset_row.setContentsMargins(0, 0, 0, 0)
         reset_row.addWidget(self.reset_btn, 0, QtCore.Qt.AlignLeft)
+        reset_row.addSpacing(8)
+        self.passcode_btn = QtWidgets.QPushButton("PssCdHs")
+        self.passcode_btn.setObjectName("ghostButton")
+        self.passcode_btn.clicked.connect(self._show_passcode_login_overlay)
+        reset_row.addWidget(self.passcode_btn, 0, QtCore.Qt.AlignLeft)
         reset_row.addStretch(1)
         card_layout.addLayout(reset_row)
 
@@ -812,10 +827,61 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         code_layout.addWidget(self.verify_btn)
         card_layout.addWidget(self.code_row)
 
-        root_layout.addWidget(card, 0, QtCore.Qt.AlignCenter)
+        content_layout.addWidget(card, 0, QtCore.Qt.AlignCenter)
+        root_layout.addWidget(self.login_content, 0, QtCore.Qt.AlignCenter)
 
         self.email_row.setVisible(False)
         self.code_row.setVisible(False)
+        self.passcode_login_overlay = OverlayController(
+            self.login_page,
+            self.login_content,
+            modal_size=QtCore.QSize(380, 240)
+        )
+        self._build_passcode_login_overlay()
+
+    def _build_passcode_login_overlay(self):
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(10, 6, 10, 10)
+        layout.setSpacing(10)
+
+        title = QtWidgets.QLabel("PassCodeHash")
+        title_font = QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        note = QtWidgets.QLabel("Вставьте PassCodeHash для быстрого входа.")
+        note.setWordWrap(True)
+        note.setObjectName("mutedLabel")
+        layout.addWidget(note)
+
+        self.passcode_login_input = QtWidgets.QLineEdit()
+        self.passcode_login_input.setPlaceholderText("PassCodeHash")
+        self.passcode_login_input.setObjectName("input")
+        self.passcode_login_input.returnPressed.connect(self._passcode_login)
+        layout.addWidget(self.passcode_login_input)
+
+        self.passcode_login_btn = QtWidgets.QPushButton("Enter")
+        self.passcode_login_btn.setObjectName("primaryButton")
+        self.passcode_login_btn.clicked.connect(self._passcode_login)
+        layout.addWidget(self.passcode_login_btn)
+
+        self.passcode_login_status = QtWidgets.QLabel("")
+        self.passcode_login_status.setObjectName("statusLabel")
+        self.passcode_login_status.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(self.passcode_login_status)
+
+        layout.addStretch(1)
+        self.passcode_login_overlay.set_content(panel)
+
+    def _show_passcode_login_overlay(self):
+        if not getattr(self, "passcode_login_overlay", None):
+            return
+        self.passcode_login_overlay.resize(self.login_page.rect())
+        self.passcode_login_input.clear()
+        self.passcode_login_status.setText("")
+        self.passcode_login_btn.setEnabled(True)
+        self.passcode_login_overlay.show()
 
     def _build_reset_step1_page(self):
         root_layout = QtWidgets.QVBoxLayout(self.reset_step1_page)
@@ -1179,7 +1245,13 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.chat_content,
             modal_size=QtCore.QSize(430, 600)
         )
+        self.passcode_overlay = OverlayController(
+            self.chat_page,
+            self.chat_content,
+            modal_size=QtCore.QSize(440, 520)
+        )
         self._build_settings_overlay()
+        self._build_passcode_overlay()
         self._init_notifications()
 
     def _labeled(self, text, widget):
@@ -1217,6 +1289,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         note.setWordWrap(True)
         note.setObjectName("mutedLabel")
         layout.addWidget(note)
+
+        self.passcode_settings_btn = QtWidgets.QPushButton('Настроить "PassCodeHash"')
+        self.passcode_settings_btn.setObjectName("ghostButton")
+        self.passcode_settings_btn.clicked.connect(self._show_passcode_overlay)
+        layout.addWidget(self.passcode_settings_btn)
         layout.addStretch(1)
 
         if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
@@ -1227,6 +1304,438 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.settings_notifications_checkbox.setToolTip("Системные уведомления недоступны.")
 
         self.settings_overlay.set_content(panel)
+
+    def _build_passcode_overlay(self):
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(10, 6, 10, 10)
+        layout.setSpacing(10)
+
+        self.passcode_stack = QtWidgets.QStackedWidget()
+        layout.addWidget(self.passcode_stack, 1)
+
+        # Home page
+        self.passcode_home_page = QtWidgets.QWidget()
+        home_layout = QtWidgets.QVBoxLayout(self.passcode_home_page)
+        home_layout.setContentsMargins(0, 0, 0, 0)
+        home_layout.setSpacing(10)
+
+        title = QtWidgets.QLabel("PassCodeHash")
+        title_font = QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        home_layout.addWidget(title)
+
+        info = QtWidgets.QLabel("Формат: {hash(pass)}:({hash(login)} * 3):{hash(ts)}")
+        info.setWordWrap(True)
+        info.setObjectName("mutedLabel")
+        home_layout.addWidget(info)
+
+        self.passcode_status_label = QtWidgets.QLabel("")
+        self.passcode_status_label.setObjectName("mutedLabel")
+        home_layout.addWidget(self.passcode_status_label)
+
+        self.passcode_create_btn = QtWidgets.QPushButton("Создать")
+        self.passcode_create_btn.setObjectName("primaryButton")
+        self.passcode_create_btn.clicked.connect(self._open_passcode_create)
+        home_layout.addWidget(self.passcode_create_btn)
+
+        self.passcode_change_btn = QtWidgets.QPushButton("Перегенерировать")
+        self.passcode_change_btn.setObjectName("ghostButton")
+        self.passcode_change_btn.clicked.connect(self._open_passcode_change)
+        home_layout.addWidget(self.passcode_change_btn)
+
+        self.passcode_reset_btn = QtWidgets.QPushButton("Сбросить")
+        self.passcode_reset_btn.setObjectName("ghostButton")
+        self.passcode_reset_btn.clicked.connect(self._open_passcode_reset)
+        home_layout.addWidget(self.passcode_reset_btn)
+
+        home_layout.addStretch(1)
+        self.passcode_stack.addWidget(self.passcode_home_page)
+
+        # Create page
+        self.passcode_create_page = QtWidgets.QWidget()
+        create_layout = QtWidgets.QVBoxLayout(self.passcode_create_page)
+        create_layout.setContentsMargins(0, 0, 0, 0)
+        create_layout.setSpacing(10)
+
+        create_title = QtWidgets.QLabel("Создать PassCodeHash")
+        create_title.setFont(title_font)
+        create_layout.addWidget(create_title)
+
+        self.passcode_create_password_input = QtWidgets.QLineEdit()
+        self.passcode_create_password_input.setPlaceholderText("Пароль")
+        self.passcode_create_password_input.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.passcode_create_password_input.setObjectName("input")
+        create_layout.addWidget(self._labeled("Password:", self.passcode_create_password_input))
+
+        self.passcode_create_send_btn = QtWidgets.QPushButton("Отправить код")
+        self.passcode_create_send_btn.setObjectName("primaryButton")
+        self.passcode_create_send_btn.clicked.connect(self._request_passcode_create)
+        create_layout.addWidget(self.passcode_create_send_btn)
+
+        self.passcode_create_status = QtWidgets.QLabel("")
+        self.passcode_create_status.setObjectName("statusLabel")
+        self.passcode_create_status.setAlignment(QtCore.Qt.AlignCenter)
+        create_layout.addWidget(self.passcode_create_status)
+
+        self.passcode_create_code_row = QtWidgets.QWidget()
+        create_code_layout = QtWidgets.QHBoxLayout(self.passcode_create_code_row)
+        create_code_layout.setContentsMargins(0, 0, 0, 0)
+        create_code_layout.setSpacing(8)
+        self.passcode_create_code_input = QtWidgets.QLineEdit()
+        self.passcode_create_code_input.setPlaceholderText("Код из письма")
+        self.passcode_create_code_input.setObjectName("input")
+        self.passcode_create_verify_btn = QtWidgets.QPushButton("Подтвердить код")
+        self.passcode_create_verify_btn.setObjectName("primaryButton")
+        self.passcode_create_verify_btn.clicked.connect(self._verify_passcode_create)
+        create_code_layout.addWidget(self._labeled("Code:", self.passcode_create_code_input))
+        create_code_layout.addWidget(self.passcode_create_verify_btn)
+        create_layout.addWidget(self.passcode_create_code_row)
+
+        self.passcode_create_back_btn = QtWidgets.QPushButton("Назад")
+        self.passcode_create_back_btn.setObjectName("ghostButton")
+        self.passcode_create_back_btn.clicked.connect(self._open_passcode_home)
+        create_layout.addWidget(self.passcode_create_back_btn, 0, QtCore.Qt.AlignLeft)
+
+        self.passcode_create_code_row.setVisible(False)
+        self.passcode_stack.addWidget(self.passcode_create_page)
+
+        # Change page
+        self.passcode_change_page = QtWidgets.QWidget()
+        change_layout = QtWidgets.QVBoxLayout(self.passcode_change_page)
+        change_layout.setContentsMargins(0, 0, 0, 0)
+        change_layout.setSpacing(10)
+
+        change_title = QtWidgets.QLabel("Перегенерировать PassCodeHash")
+        change_title.setFont(title_font)
+        change_layout.addWidget(change_title)
+
+        self.passcode_change_password_input = QtWidgets.QLineEdit()
+        self.passcode_change_password_input.setPlaceholderText("Пароль")
+        self.passcode_change_password_input.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.passcode_change_password_input.setObjectName("input")
+        change_layout.addWidget(self._labeled("Password:", self.passcode_change_password_input))
+
+        self.passcode_change_btn = QtWidgets.QPushButton("Отправить код")
+        self.passcode_change_btn.setObjectName("primaryButton")
+        self.passcode_change_btn.clicked.connect(self._request_passcode_change)
+        change_layout.addWidget(self.passcode_change_btn)
+
+        self.passcode_change_status = QtWidgets.QLabel("")
+        self.passcode_change_status.setObjectName("statusLabel")
+        self.passcode_change_status.setAlignment(QtCore.Qt.AlignCenter)
+        change_layout.addWidget(self.passcode_change_status)
+
+        self.passcode_change_code_row = QtWidgets.QWidget()
+        change_code_layout = QtWidgets.QHBoxLayout(self.passcode_change_code_row)
+        change_code_layout.setContentsMargins(0, 0, 0, 0)
+        change_code_layout.setSpacing(8)
+        self.passcode_change_code_input = QtWidgets.QLineEdit()
+        self.passcode_change_code_input.setPlaceholderText("Код из письма")
+        self.passcode_change_code_input.setObjectName("input")
+        self.passcode_change_verify_btn = QtWidgets.QPushButton("Подтвердить код")
+        self.passcode_change_verify_btn.setObjectName("primaryButton")
+        self.passcode_change_verify_btn.clicked.connect(self._verify_passcode_change)
+        change_code_layout.addWidget(self._labeled("Code:", self.passcode_change_code_input))
+        change_code_layout.addWidget(self.passcode_change_verify_btn)
+        change_layout.addWidget(self.passcode_change_code_row)
+
+        self.passcode_change_back_btn = QtWidgets.QPushButton("Назад")
+        self.passcode_change_back_btn.setObjectName("ghostButton")
+        self.passcode_change_back_btn.clicked.connect(self._open_passcode_home)
+        change_layout.addWidget(self.passcode_change_back_btn, 0, QtCore.Qt.AlignLeft)
+
+        self.passcode_change_code_row.setVisible(False)
+        self.passcode_stack.addWidget(self.passcode_change_page)
+
+        # Reset page
+        self.passcode_reset_page = QtWidgets.QWidget()
+        reset_layout = QtWidgets.QVBoxLayout(self.passcode_reset_page)
+        reset_layout.setContentsMargins(0, 0, 0, 0)
+        reset_layout.setSpacing(10)
+
+        reset_title = QtWidgets.QLabel("Сбросить PassCodeHash")
+        reset_title.setFont(title_font)
+        reset_layout.addWidget(reset_title)
+
+        self.passcode_reset_password_input = QtWidgets.QLineEdit()
+        self.passcode_reset_password_input.setPlaceholderText("Пароль")
+        self.passcode_reset_password_input.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.passcode_reset_password_input.setObjectName("input")
+        reset_layout.addWidget(self._labeled("Password:", self.passcode_reset_password_input))
+
+        self.passcode_reset_send_btn = QtWidgets.QPushButton("Сбросить")
+        self.passcode_reset_send_btn.setObjectName("primaryButton")
+        self.passcode_reset_send_btn.clicked.connect(self._request_passcode_reset)
+        reset_layout.addWidget(self.passcode_reset_send_btn)
+
+        self.passcode_reset_status = QtWidgets.QLabel("")
+        self.passcode_reset_status.setObjectName("statusLabel")
+        self.passcode_reset_status.setAlignment(QtCore.Qt.AlignCenter)
+        reset_layout.addWidget(self.passcode_reset_status)
+
+        self.passcode_reset_back_btn = QtWidgets.QPushButton("Назад")
+        self.passcode_reset_back_btn.setObjectName("ghostButton")
+        self.passcode_reset_back_btn.clicked.connect(self._open_passcode_home)
+        reset_layout.addWidget(self.passcode_reset_back_btn, 0, QtCore.Qt.AlignLeft)
+
+        self.passcode_stack.addWidget(self.passcode_reset_page)
+
+        # Result page
+        self.passcode_result_page = QtWidgets.QWidget()
+        result_layout = QtWidgets.QVBoxLayout(self.passcode_result_page)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.setSpacing(10)
+
+        result_title = QtWidgets.QLabel("PassCodeHash готов")
+        result_title.setFont(title_font)
+        result_layout.addWidget(result_title)
+
+        warning = QtWidgets.QLabel("Скопируйте этот код и ни в коем случае не делитесь им!!")
+        warning.setWordWrap(True)
+        warning.setObjectName("statusLabel")
+        result_layout.addWidget(warning)
+
+        self.passcode_result_input = QtWidgets.QLineEdit()
+        self.passcode_result_input.setObjectName("input")
+        self.passcode_result_input.setReadOnly(True)
+        result_layout.addWidget(self.passcode_result_input)
+
+        self.passcode_result_copy_btn = QtWidgets.QPushButton("Скопировать")
+        self.passcode_result_copy_btn.setObjectName("primaryButton")
+        self.passcode_result_copy_btn.clicked.connect(self._copy_passcode_result)
+        result_layout.addWidget(self.passcode_result_copy_btn)
+
+        self.passcode_result_status = QtWidgets.QLabel("")
+        self.passcode_result_status.setObjectName("statusLabel")
+        self.passcode_result_status.setAlignment(QtCore.Qt.AlignCenter)
+        result_layout.addWidget(self.passcode_result_status)
+
+        self.passcode_result_back_btn = QtWidgets.QPushButton("Готово")
+        self.passcode_result_back_btn.setObjectName("ghostButton")
+        self.passcode_result_back_btn.clicked.connect(self._close_passcode_overlay)
+        result_layout.addWidget(self.passcode_result_back_btn, 0, QtCore.Qt.AlignLeft)
+
+        result_layout.addStretch(1)
+        self.passcode_stack.addWidget(self.passcode_result_page)
+
+        self.passcode_overlay.set_content(panel)
+
+    def _show_passcode_overlay(self):
+        if not getattr(self, "passcode_overlay", None):
+            return
+        if getattr(self, "settings_overlay", None):
+            self.settings_overlay.hide()
+        self._open_passcode_home()
+        self.passcode_overlay.show()
+        self._request_passcode_status()
+
+    def _close_passcode_overlay(self):
+        if getattr(self, "passcode_overlay", None):
+            self.passcode_overlay.hide()
+
+    def _open_passcode_home(self):
+        if getattr(self, "passcode_stack", None):
+            self.passcode_stack.setCurrentWidget(self.passcode_home_page)
+        if getattr(self, "passcode_status_label", None):
+            self.passcode_status_label.setText("")
+        self._passcode_waiting_mode = ""
+        self._passcode_verified_mode = ""
+        if getattr(self, "passcode_change_btn", None):
+            self.passcode_change_btn.setVisible(False)
+        if getattr(self, "passcode_reset_btn", None):
+            self.passcode_reset_btn.setVisible(False)
+        if getattr(self, "passcode_create_btn", None):
+            self.passcode_create_btn.setVisible(True)
+
+    def _open_passcode_create(self):
+        self._passcode_waiting_mode = ""
+        self._passcode_verified_mode = ""
+        self.passcode_create_password_input.clear()
+        self.passcode_create_code_input.clear()
+        self.passcode_create_status.setText("")
+        self.passcode_create_code_row.setVisible(False)
+        self.passcode_create_send_btn.setEnabled(True)
+        self.passcode_create_verify_btn.setEnabled(True)
+        self.passcode_stack.setCurrentWidget(self.passcode_create_page)
+
+    def _open_passcode_change(self):
+        self._passcode_waiting_mode = ""
+        self._passcode_verified_mode = ""
+        self.passcode_change_password_input.clear()
+        self.passcode_change_code_input.clear()
+        self.passcode_change_status.setText("")
+        self.passcode_change_code_row.setVisible(False)
+        self.passcode_change_btn.setEnabled(True)
+        self.passcode_change_verify_btn.setEnabled(True)
+        self.passcode_stack.setCurrentWidget(self.passcode_change_page)
+
+    def _open_passcode_reset(self):
+        self._passcode_waiting_mode = ""
+        self._passcode_verified_mode = ""
+        self.passcode_reset_password_input.clear()
+        self.passcode_reset_status.setText("")
+        self.passcode_reset_send_btn.setEnabled(True)
+        self.passcode_stack.setCurrentWidget(self.passcode_reset_page)
+
+    def _request_passcode_status(self):
+        if not self.sender_thread:
+            return
+        self._send_action({"action": "passcode_status"})
+
+    def _request_passcode_create(self):
+        password = self.passcode_create_password_input.text().strip()
+        if not password:
+            self.passcode_create_status.setText("Введите пароль")
+            return
+        self.passcode_create_send_btn.setEnabled(False)
+        self.passcode_create_verify_btn.setEnabled(False)
+        self.passcode_create_status.setText("Отправка кода...")
+        self._passcode_waiting_mode = "create"
+        self._passcode_verified_mode = ""
+        self._send_action({
+            "action": "passcode_create_request",
+            "password": password
+        })
+
+    def _verify_passcode_create(self):
+        code = self.passcode_create_code_input.text().strip()
+        if not code:
+            self.passcode_create_status.setText("Введите код")
+            return
+        self.passcode_create_verify_btn.setEnabled(False)
+        self.passcode_create_status.setText("Проверка...")
+        self._passcode_verified_mode = "create"
+        self._send_action({"action": "passcode_create_verify", "code": code})
+
+    def _request_passcode_change(self):
+        password = self.passcode_change_password_input.text().strip()
+        if not password:
+            self.passcode_change_status.setText("Введите пароль")
+            return
+        self.passcode_change_btn.setEnabled(False)
+        self.passcode_change_verify_btn.setEnabled(False)
+        self.passcode_change_status.setText("Отправка кода...")
+        self._passcode_waiting_mode = "change"
+        self._passcode_verified_mode = ""
+        self._send_action({
+            "action": "passcode_change",
+            "password": password
+        })
+
+    def _verify_passcode_change(self):
+        code = self.passcode_change_code_input.text().strip()
+        if not code:
+            self.passcode_change_status.setText("Введите код")
+            return
+        self.passcode_change_verify_btn.setEnabled(False)
+        self.passcode_change_status.setText("Проверка...")
+        self._passcode_verified_mode = "change"
+        self._send_action({"action": "passcode_change_verify", "code": code})
+
+    def _request_passcode_reset(self):
+        password = self.passcode_reset_password_input.text().strip()
+        if not password:
+            self.passcode_reset_status.setText("Введите пароль")
+            return
+        self.passcode_reset_send_btn.setEnabled(False)
+        self.passcode_reset_status.setText("Сброс...")
+        self._passcode_waiting_mode = ""
+        self._passcode_verified_mode = ""
+        self._send_action({"action": "passcode_reset_request", "password": password})
+
+    def _show_passcode_result(self, passcode):
+        self.passcode_result_input.setText(passcode)
+        self.passcode_result_status.setText("")
+        self.passcode_stack.setCurrentWidget(self.passcode_result_page)
+
+    def _copy_passcode_result(self):
+        passcode = self.passcode_result_input.text().strip()
+        if not passcode:
+            self.passcode_result_status.setText("Нет кода для копирования")
+            return
+        QtWidgets.QApplication.clipboard().setText(passcode)
+        self.passcode_result_status.setText("Скопировано")
+
+    def _handle_passcode_response(self, data):
+        status = (data.get("status") or "").strip().lower()
+        mode = (data.get("mode") or "").strip().lower()
+        message = data.get("message", "")
+
+        if mode == "status":
+            has_passcode = bool(data.get("has_passcode", False))
+            if getattr(self, "passcode_status_label", None):
+                state = "настроен" if has_passcode else "не настроен"
+                self.passcode_status_label.setText(f"Статус: {state}")
+            if getattr(self, "passcode_change_btn", None):
+                self.passcode_change_btn.setVisible(has_passcode)
+            if getattr(self, "passcode_reset_btn", None):
+                self.passcode_reset_btn.setVisible(has_passcode)
+            if getattr(self, "passcode_create_btn", None):
+                self.passcode_create_btn.setVisible(not has_passcode)
+            return
+
+        if status == "need_code":
+            info = message or "Мы отправили код на почту"
+            if mode == "create":
+                self.passcode_create_status.setText(info)
+                self.passcode_create_code_row.setVisible(True)
+                self.passcode_create_send_btn.setEnabled(True)
+                self.passcode_create_verify_btn.setEnabled(True)
+                self._passcode_waiting_mode = "create"
+            elif mode == "change":
+                self.passcode_change_status.setText(info)
+                self.passcode_change_code_row.setVisible(True)
+                self.passcode_change_btn.setEnabled(True)
+                self.passcode_change_verify_btn.setEnabled(True)
+                self._passcode_waiting_mode = "change"
+            return
+
+        if status == "ok":
+            passcode_value = (data.get("passcode") or "").strip()
+            if mode == "create":
+                self.passcode_create_send_btn.setEnabled(True)
+                self.passcode_create_verify_btn.setEnabled(True)
+                if message:
+                    self.passcode_create_status.setText(message)
+            elif mode == "reset":
+                self.passcode_reset_send_btn.setEnabled(True)
+                if message:
+                    self.passcode_reset_status.setText(message)
+            elif mode == "change":
+                self.passcode_change_btn.setEnabled(True)
+                self.passcode_change_verify_btn.setEnabled(True)
+                if message:
+                    self.passcode_change_status.setText(message)
+            if mode in ("create", "change") and self._passcode_verified_mode != mode:
+                if mode == "create":
+                    self.passcode_create_status.setText("Подтвердите код из письма")
+                elif mode == "change":
+                    self.passcode_change_status.setText("Подтвердите код из письма")
+                return
+            if passcode_value:
+                self._passcode_waiting_mode = ""
+                self._passcode_verified_mode = ""
+                self._show_passcode_result(passcode_value)
+            elif mode == "reset":
+                self._open_passcode_home()
+                self._request_passcode_status()
+            return
+
+        if status == "error":
+            error_text = message or "Ошибка"
+            if mode == "create":
+                self.passcode_create_send_btn.setEnabled(True)
+                self.passcode_create_verify_btn.setEnabled(True)
+                self.passcode_create_status.setText(error_text)
+            elif mode == "reset":
+                self.passcode_reset_send_btn.setEnabled(True)
+                self.passcode_reset_status.setText(error_text)
+            elif mode == "change":
+                self.passcode_change_btn.setEnabled(True)
+                self.passcode_change_verify_btn.setEnabled(True)
+                self.passcode_change_status.setText(error_text)
+            return
 
     def _init_notifications(self):
         self.popup_notifier = PopupNotifier(self)
@@ -1287,6 +1796,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def show_login_screen(self, status_text=""):
         self.status_label.setText(status_text)
+        if getattr(self, "settings_overlay", None):
+            self.settings_overlay.hide()
+        if getattr(self, "profile_overlay", None):
+            self.profile_overlay.hide()
+        if getattr(self, "passcode_overlay", None):
+            self.passcode_overlay.hide()
+        if getattr(self, "passcode_login_overlay", None):
+            self.passcode_login_overlay.hide()
         if self.pending_socket:
             try:
                 self.pending_socket.close()
@@ -1934,6 +2451,61 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.connect_btn.setEnabled(True)
             self.status_label.setText("")
             QtWidgets.QMessageBox.critical(self, "Ошибка", message)
+
+        self.auth_worker.success.connect(on_success)
+        self.auth_worker.error.connect(on_error)
+        self.auth_worker.start()
+
+    def _passcode_login(self):
+        passcode = self.passcode_login_input.text().strip()
+        if not passcode:
+            self.passcode_login_status.setText("Введите PassCodeHash")
+            return
+
+        self.passcode_login_btn.setEnabled(False)
+        self.passcode_login_status.setText("Подключение...")
+
+        self.auth_worker = AuthWorker(
+            self.host,
+            self.port,
+            "",
+            "",
+            "",
+            "passcode_login",
+            passcode=passcode
+        )
+
+        def on_success(sock, resp, rest_or_status):
+            self.passcode_login_btn.setEnabled(True)
+            resp_username = (resp.get("username") or "").strip()
+            if resp_username:
+                self.username = resp_username
+
+            self._load_downloaded_files_for_account(self.username)
+            self.client_socket = sock
+            self.prebuffer = rest_or_status
+            self.running = True
+            if getattr(self, "passcode_login_overlay", None):
+                self.passcode_login_overlay.hide()
+            self.show_chat_screen()
+
+            self.sender_thread = SenderThread(self.client_socket)
+            self.sender_thread.error.connect(lambda _err: None)
+            self.sender_thread.start()
+            self._request_profile(self.username)
+
+            self.receiver_thread = ReceiverThread(self.client_socket, self.prebuffer)
+            self.receiver_thread.message_received.connect(self.display_message)
+            self.receiver_thread.connection_lost.connect(self.connection_lost)
+            self.receiver_thread.start()
+
+            token = (resp.get("token") or "").strip()
+            if token and self.remember_checkbox.isChecked():
+                self._remember_account(self.username, token, set_active=True)
+
+        def on_error(message):
+            self.passcode_login_btn.setEnabled(True)
+            self.passcode_login_status.setText(message)
 
         self.auth_worker.success.connect(on_success)
         self.auth_worker.error.connect(on_error)
@@ -2606,6 +3178,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     # ================= DISPLAY =================
 
     def display_message(self, data):
+        if data.get("type") == "passcode":
+            self._handle_passcode_response(data)
+            return
         if data.get("type") == "history":
             items = data.get("items", [])
             for item in items:
@@ -3460,6 +4035,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self._update_message_widths()
         if getattr(self, "settings_overlay", None):
             self.settings_overlay.resize(self.chat_page.rect())
+        if getattr(self, "passcode_overlay", None):
+            self.passcode_overlay.resize(self.chat_page.rect())
+        if getattr(self, "passcode_login_overlay", None):
+            self.passcode_login_overlay.resize(self.login_page.rect())
 
     def _show_settings_overlay(self):
         if getattr(self, "settings_overlay", None):
@@ -3476,6 +4055,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 return
             if getattr(self, "settings_overlay", None) and self.settings_overlay.is_visible():
                 self.settings_overlay.hide()
+                return
+            if getattr(self, "passcode_overlay", None) and self.passcode_overlay.is_visible():
+                self.passcode_overlay.hide()
+                return
+            if getattr(self, "passcode_login_overlay", None) and self.passcode_login_overlay.is_visible():
+                self.passcode_login_overlay.hide()
                 return
         super().keyPressEvent(event)
 

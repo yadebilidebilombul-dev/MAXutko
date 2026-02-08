@@ -119,10 +119,35 @@ class OverlayController(QtCore.QObject):
     def _animate(self, show=True):
         if self._anim_group is not None:
             try:
+                self._anim_group.finished.disconnect(self._cleanup_hide)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                self._anim_group.finished.disconnect(self._clear_anim_group)
+            except (TypeError, RuntimeError):
+                pass
+            try:
                 self._anim_group.stop()
             except RuntimeError:
                 pass
+            try:
+                self._anim_group.deleteLater()
+            except RuntimeError:
+                pass
+            self._anim_group = None
         self._anim_group = QtCore.QParallelAnimationGroup(self)
+
+        if self._blur_effect is None:
+            self._blur_effect = QtWidgets.QGraphicsBlurEffect(self.content_widget)
+            self._blur_effect.setBlurRadius(0)
+            self.content_widget.setGraphicsEffect(self._blur_effect)
+        else:
+            try:
+                self._blur_effect.blurRadius()
+            except RuntimeError:
+                self._blur_effect = QtWidgets.QGraphicsBlurEffect(self.content_widget)
+                self._blur_effect.setBlurRadius(0)
+                self.content_widget.setGraphicsEffect(self._blur_effect)
 
         blur_anim = QtCore.QPropertyAnimation(self._blur_effect, b"blurRadius", self)
         blur_anim.setDuration(180)
@@ -154,6 +179,8 @@ class OverlayController(QtCore.QObject):
         self._anim_group = None
 
     def _cleanup_hide(self):
+        if self.overlay.isVisible():
+            return
         self.overlay.hide()
         self.content_widget.setGraphicsEffect(None)
         if self._blur_effect is not None:

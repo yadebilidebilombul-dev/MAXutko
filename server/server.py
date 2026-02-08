@@ -70,6 +70,8 @@ class MAXutkoServer:
         self.pending_lock = threading.Lock()
         self.reset_pending = {}  # username -> {email, code, expires_at}
         self.reset_pending_lock = threading.Lock()
+        self.passcode_pending = {}
+        self.passcode_pending_lock = threading.Lock()
         self.tokens_path = os.path.join(os.path.dirname(__file__), "tokens.json")
         self.tokens_lock = threading.Lock()
         self.tokens = self.load_tokens()
@@ -161,6 +163,9 @@ class MAXutkoServer:
         data.setdefault("salt", "")
         data.setdefault("hash", "")
         data.setdefault("email", "")
+        if "passcode_hash" not in data or not isinstance(data.get("passcode_hash"), str):
+            data["passcode_hash"] = ""
+            changed = True
         if not isinstance(data.get("registered_at"), (int, float)) or data.get("registered_at", 0) <= 0:
             data["registered_at"] = int(time.time())
             changed = True
@@ -327,9 +332,57 @@ class MAXutkoServer:
             return False
 
 
+    def _hash_plain(self, value):
+        return hashlib.sha256(str(value).encode()).hexdigest()
+
+    def _mask_email(self, email):
+        email = (email or "").strip()
+        if "@" not in email:
+            return "***"
+        local, domain = email.split("@", 1)
+        if not local:
+            local_mask = "*"
+        elif len(local) == 1:
+            local_mask = local + "*"
+        elif len(local) == 2:
+            local_mask = local[0] + "*"
+        else:
+            local_mask = local[0] + ("*" * (len(local) - 2)) + local[-1]
+        parts = domain.split(".")
+        if len(parts) >= 2:
+            d0 = parts[0]
+            if not d0:
+                d0_mask = "*"
+            elif len(d0) == 1:
+                d0_mask = d0 + "*"
+            else:
+                d0_mask = d0[0] + ("*" * (len(d0) - 1))
+            domain_mask = ".".join([d0_mask] + parts[1:])
+        else:
+            domain_mask = "*" * max(1, len(domain))
+        return f"{local_mask}@{domain_mask}"
+
     def _hash_password(self, password, salt):
 
         return hashlib.sha256((salt + password).encode()).hexdigest()
+
+    def _build_passcode(self, username, password, timestamp):
+        if not username or not password:
+            return ""
+        pw_hash = self._hash_plain(password)
+        user_hash = self._hash_plain(username)
+        ts_hash = self._hash_plain(timestamp)
+        return f"{pw_hash}:{user_hash * 3}:{ts_hash}"
+
+    def _find_username_by_passcode(self, passcode):
+        passcode = (passcode or "").strip()
+        if not passcode:
+            return ""
+        with self.accounts_lock:
+            for name, acc in self.accounts.items():
+                if (acc.get("passcode_hash") or "").strip() == passcode:
+                    return name
+        return ""
 
 
     def verify_password(self, stored, password):
@@ -353,6 +406,7 @@ class MAXutkoServer:
             "salt": salt,
             "hash": pw_hash,
             "email": email,
+            "passcode_hash": "",
             "profile": {"nick": "", "about": "", "avatar": "", "clan_primary": "", "clan_secondary": "Новичок"},
             "registered_at": int(time.time())
         }
@@ -385,6 +439,21 @@ class MAXutkoServer:
             data["username"] = username
         self._safe_send_json(client, data)
 
+    def send_passcode(self, client, status, message="", mode="", passcode="", has_passcode=None):
+        data = {
+            "type": "passcode",
+            "status": status
+        }
+        if message:
+            data["message"] = message
+        if mode:
+            data["mode"] = mode
+        if passcode:
+            data["passcode"] = passcode
+        if has_passcode is not None:
+            data["has_passcode"] = bool(has_passcode)
+        self._safe_send_json(client, data)
+
     def _rate_limit(self, key, limit, window_seconds):
         now = time.time()
         with self.rate_limits_lock:
@@ -396,6 +465,170 @@ class MAXutkoServer:
             bucket.append(now)
             self.rate_limits[key] = bucket
             return True
+
+    def _handle_passcode_status(self, client, username):
+        with self.accounts_lock:
+            acc = self.accounts.get(username)
+        has_passcode = bool(acc and (acc.get("passcode_hash") or "").strip())
+        self.send_passcode(client, "ok", mode="status", has_passcode=has_passcode)
+
+    def _handle_passcode_create_request(self, client, username, password):
+        if not password:
+            self.send_passcode(client, "error", "Введите пароль", mode="create")
+            return
+        with self.accounts_lock:
+            acc = self.accounts.get(username)
+        if not acc:
+            self.send_passcode(client, "error", "Пользователь не найден", mode="create")
+            return
+        if not self.verify_password(acc, password):
+            self.send_passcode(client, "error", "Неверный пароль", mode="create")
+            return
+        existing = (acc.get("passcode_hash") or "").strip()
+        if existing:
+            self.send_passcode(client, "error", "PassCodeHash уже настроен", mode="create")
+            return
+        stored_email = (acc.get("email") or "").strip()
+        if not stored_email:
+            self.send_passcode(client, "error", "Почта не указана", mode="create")
+            return
+        passcode_value = self._build_passcode(username, password, int(time.time()))
+        if not passcode_value:
+            self.send_passcode(client, "error", "Не удалось создать код", mode="create")
+            return
+        code = CodeGenerator.generate_code(6)
+        expires_at = time.time() + 300
+        with self.passcode_pending_lock:
+            self.passcode_pending[username] = {
+                "code": code,
+                "expires_at": expires_at,
+                "passcode": passcode_value,
+                "mode": "create"
+            }
+        self.mailer.send_code(stored_email, code)
+        masked = self._mask_email(stored_email)
+        self.send_passcode(
+            client,
+            "need_code",
+            f"Код отправлен на почту профиля: {masked}",
+            mode="create"
+        )
+
+    def _handle_passcode_change_request(self, client, username, password):
+        if not password:
+            self.send_passcode(client, "error", "Введите пароль", mode="change")
+            return
+        with self.accounts_lock:
+            acc = self.accounts.get(username)
+        if not acc:
+            self.send_passcode(client, "error", "Пользователь не найден", mode="change")
+            return
+        if not self.verify_password(acc, password):
+            self.send_passcode(client, "error", "Неверный пароль", mode="change")
+            return
+        existing = (acc.get("passcode_hash") or "").strip()
+        if not existing:
+            self.send_passcode(client, "error", "PassCodeHash не настроен", mode="change")
+            return
+        stored_email = (acc.get("email") or "").strip()
+        if not stored_email:
+            self.send_passcode(client, "error", "Почта не указана", mode="change")
+            return
+        passcode_value = self._build_passcode(username, password, int(time.time()))
+        if not passcode_value:
+            self.send_passcode(client, "error", "Не удалось создать код", mode="change")
+            return
+        code = CodeGenerator.generate_code(6)
+        expires_at = time.time() + 300
+        with self.passcode_pending_lock:
+            self.passcode_pending[username] = {
+                "code": code,
+                "expires_at": expires_at,
+                "passcode": passcode_value,
+                "mode": "change"
+            }
+        self.mailer.send_code(stored_email, code)
+        masked = self._mask_email(stored_email)
+        self.send_passcode(
+            client,
+            "need_code",
+            f"Код отправлен на почту профиля: {masked}",
+            mode="change"
+        )
+        with self.accounts_lock:
+            acc = self.accounts.get(username)
+            if not acc:
+                self.send_passcode(client, "error", "Пользователь не найден", mode="create")
+                return
+            acc["passcode_hash"] = passcode_value
+            self.accounts[username] = acc
+            self.save_accounts()
+        self.send_passcode(client, "ok", "PassCodeHash готов", mode="create", passcode=passcode_value)
+
+    def _handle_passcode_verify(self, client, username, code, mode):
+        mode = (mode or "").strip().lower()
+        if mode not in ("create", "change"):
+            self.send_passcode(client, "error", "Некорректный режим", mode=mode)
+            return
+        code = (code or "").strip()
+        if not code:
+            self.send_passcode(client, "error", "Введите код", mode=mode)
+            return
+        with self.passcode_pending_lock:
+            pending = self.passcode_pending.get(username)
+            if not pending:
+                self.send_passcode(client, "error", "Нет ожидающей проверки", mode=mode)
+                return
+            if pending.get("mode") != mode:
+                self.send_passcode(client, "error", "Некорректный режим", mode=mode)
+                return
+            if time.time() > pending.get("expires_at", 0):
+                del self.passcode_pending[username]
+                self.send_passcode(client, "error", "Код просрочен", mode=mode)
+                return
+            if code != pending.get("code"):
+                self.send_passcode(client, "error", "Неверный код", mode=mode)
+                return
+            passcode_value = pending.get("passcode") or ""
+            del self.passcode_pending[username]
+        if not passcode_value:
+            self.send_passcode(client, "error", "Не удалось создать код", mode=mode)
+            return
+        with self.accounts_lock:
+            acc = self.accounts.get(username)
+            if not acc:
+                self.send_passcode(client, "error", "Пользователь не найден", mode=mode)
+                return
+            acc["passcode_hash"] = passcode_value
+            self.accounts[username] = acc
+            self.save_accounts()
+        self.send_passcode(client, "ok", "PassCodeHash готов", mode=mode, passcode=passcode_value)
+
+    def _handle_passcode_reset(self, client, username, password):
+        if not password:
+            self.send_passcode(client, "error", "Введите пароль", mode="reset")
+            return
+        with self.accounts_lock:
+            acc = self.accounts.get(username)
+        if not acc:
+            self.send_passcode(client, "error", "Пользователь не найден", mode="reset")
+            return
+        if not self.verify_password(acc, password):
+            self.send_passcode(client, "error", "Неверный пароль", mode="reset")
+            return
+        existing = (acc.get("passcode_hash") or "").strip()
+        if not existing:
+            self.send_passcode(client, "error", "PassCodeHash не настроен", mode="reset")
+            return
+        with self.accounts_lock:
+            acc = self.accounts.get(username)
+            if not acc:
+                self.send_passcode(client, "error", "Пользователь не найден", mode="reset")
+                return
+            acc["passcode_hash"] = ""
+            self.accounts[username] = acc
+            self.save_accounts()
+        self.send_passcode(client, "ok", "PassCodeHash сброшен", mode="reset")
 
     # ================= NOTES =================
 
@@ -892,6 +1125,7 @@ class MAXutkoServer:
             email = login.get("email", "").strip()
             action = login.get("action", "login")
             token = login.get("token", "")
+            passcode = (login.get("passcode") or "").strip()
 
             if action == "token_login":
                 if not self._rate_limit(f"auth:token:{ip}", 5, 30):
@@ -901,6 +1135,20 @@ class MAXutkoServer:
                 username = self._username_by_token(token)
                 if not username:
                     self.send_auth(client, "error", "Invalid token")
+                    client.close()
+                    return
+            elif action == "passcode_login":
+                if not self._rate_limit(f"auth:passcode:{ip}", 10, 60):
+                    self.send_auth(client, "error", "Too many attempts")
+                    client.close()
+                    return
+                if not passcode:
+                    self.send_auth(client, "error", "Missing PassCodeHash")
+                    client.close()
+                    return
+                username = self._find_username_by_passcode(passcode)
+                if not username:
+                    self.send_auth(client, "error", "Invalid PassCodeHash")
                     client.close()
                     return
             elif not username:
@@ -913,19 +1161,19 @@ class MAXutkoServer:
                 client.close()
                 return
 
-            if action not in ("login", "register", "reset_request", "token_login"):
+            if action not in ("login", "register", "reset_request", "token_login", "passcode_login"):
                 self.send_auth(client, "error", "Invalid action")
                 client.close()
                 return
 
-            if action not in ("reset_request", "token_login") and not password:
+            if action not in ("reset_request", "token_login", "passcode_login") and not password:
                 self.send_auth(client, "error", "Missing username or password")
                 client.close()
                 return
 
             # ---- AUTH ----
 
-            if action in ("login", "register", "reset_request"):
+            if action in ("login", "register", "reset_request", "passcode_login"):
                 if not self._rate_limit(f"auth:{action}:{ip}", 10, 60):
                     self.send_auth(client, "error", "Too many attempts")
                     client.close()
@@ -1019,6 +1267,7 @@ class MAXutkoServer:
                             "salt": pending["salt"],
                             "hash": pending["hash"],
                             "email": pending["email"],
+                            "passcode_hash": "",
                             "profile": {"nick": "", "about": "", "avatar": "", "clan_primary": "", "clan_secondary": "Новичок"},
                             "registered_at": int(time.time())
                         }
@@ -1154,7 +1403,7 @@ class MAXutkoServer:
                     client.close()
                     return
             else:
-                # token_login already validated
+                # token_login/passcode_login already validated
                 pass
 
             self._refresh_account_clan_for_user(username)
@@ -1237,6 +1486,47 @@ class MAXutkoServer:
                             continue
                         if action == "file_request":
                             self._handle_file_request(username, msg, client)
+                            continue
+                        if action == "passcode_status":
+                            self._handle_passcode_status(client, username)
+                            continue
+                        if action == "passcode_create_request":
+                            if not self._rate_limit(f"passcode:create:{ip}", 6, 60):
+                                self.send_passcode(client, "error", "Слишком много попыток", mode="create")
+                                continue
+                            self._handle_passcode_create_request(
+                                client,
+                                username,
+                                msg.get("password", "")
+                            )
+                            continue
+                        if action == "passcode_create_verify":
+                            if not self._rate_limit(f"passcode:create_verify:{ip}", 10, 60):
+                                self.send_passcode(client, "error", "Слишком много попыток", mode="create")
+                                continue
+                            self._handle_passcode_verify(client, username, msg.get("code", ""), "create")
+                            continue
+                        if action == "passcode_reset_request":
+                            if not self._rate_limit(f"passcode:reset:{ip}", 6, 60):
+                                self.send_passcode(client, "error", "Слишком много попыток", mode="reset")
+                                continue
+                            self._handle_passcode_reset(client, username, msg.get("password", ""))
+                            continue
+                        if action == "passcode_change":
+                            if not self._rate_limit(f"passcode:change:{ip}", 10, 60):
+                                self.send_passcode(client, "error", "Слишком много попыток", mode="change")
+                                continue
+                            self._handle_passcode_change_request(
+                                client,
+                                username,
+                                msg.get("password", "")
+                            )
+                            continue
+                        if action == "passcode_change_verify":
+                            if not self._rate_limit(f"passcode:change_verify:{ip}", 10, 60):
+                                self.send_passcode(client, "error", "Слишком много попыток", mode="change")
+                                continue
+                            self._handle_passcode_verify(client, username, msg.get("code", ""), "change")
                             continue
                         if action == "get_profile":
                             target = (msg.get("username") or "").strip()

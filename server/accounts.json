@@ -10,7 +10,8 @@
       "clan_primary": "Одмен",
       "clan_secondary": "Новичок"
     },
-    "registered_at": 1770564950
+    "registered_at": 1770564950,
+    "passcode_hash": "08c746a4040885e0b91499d7727f8482be05ef44b604989938b7fec6dc5a066d:b01ee50a2b049f9161a35b9b29f1bd92c30e3449fae9fffc65a6372e4707a975b01ee50a2b049f9161a35b9b29f1bd92c30e3449fae9fffc65a6372e4707a975b01ee50a2b049f9161a35b9b29f1bd92c30e3449fae9fffc65a6372e4707a975:78c0b48efe4d0db2399d29cfff17f672aa77d3e43c07f747335275233fe6b169"
   },
   "test": {
     "salt": "75f4a092131edad70f0cd94a5c924cf5",
@@ -23,7 +24,8 @@
       "clan_primary": "",
       "clan_secondary": "Новичок"
     },
-    "registered_at": 1770564950
+    "registered_at": 1770564950,
+    "passcode_hash": ""
   },
   "VankaPidorTochkaChmo": {
     "salt": "e555c3b110d2f35a6e99e3dc3a49a791",
@@ -36,7 +38,8 @@
       "clan_secondary": "Новичок",
       "clan_primary": ""
     },
-    "registered_at": 1770564950
+    "registered_at": 1770564950,
+    "passcode_hash": ""
   },
   "denik": {
     "salt": "c3f575c46cd9e9b0588469fab5a1ee49",
@@ -49,6 +52,7 @@
       "clan_primary": "",
       "clan_secondary": "Новичок"
     },
-    "registered_at": 1770564950
+    "registered_at": 1770564950,
+    "passcode_hash": ""
   }
 }
