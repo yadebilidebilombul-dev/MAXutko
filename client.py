@@ -19,10 +19,13 @@ class MAXutkoClient:
         # Socket
         self.client_socket = None
         self.running = False
+        self.prebuffer = ""
 
         self.host = "127.0.0.1"
         self.port = 5555
         self.username = ""
+        self.password = ""
+        self.auth_mode = tk.StringVar(value="login")
 
         self.colors = {
             'bg': '#2c3e50',
@@ -54,6 +57,7 @@ class MAXutkoClient:
         self.normal_font = font.Font(size=10)
         self.message_font = font.Font(size=11)
         self.timestamp_font = font.Font(size=8, slant="italic")
+        self.status_font = font.Font(size=12, weight="bold")
 
 
     def show_login_screen(self):
@@ -94,34 +98,62 @@ class MAXutkoClient:
         )
         self.username_entry.pack(side="left")
 
-        # Server
+        # Password
 
-        s_frame = tk.Frame(self.login_frame, bg=self.colors['bg'])
-        s_frame.pack(pady=10)
+        p_frame = tk.Frame(self.login_frame, bg=self.colors['bg'])
+        p_frame.pack(pady=10)
 
         tk.Label(
-            s_frame,
-            text="Server:",
+            p_frame,
+            text="Password:",
             bg=self.colors['bg'],
             fg=self.colors['fg']
         ).pack(side="left", padx=5)
 
-        self.server_entry = tk.Entry(
-            s_frame,
+        self.password_entry = tk.Entry(
+            p_frame,
             width=30,
+            show="*",
             bg=self.colors['secondary'],
             fg=self.colors['fg'],
             insertbackground="white"
         )
-        self.server_entry.pack(side="left")
+        self.password_entry.pack(side="left")
 
-        self.server_entry.insert(0, "127.0.0.1:5555")
+        # Mode
+
+        mode_frame = tk.Frame(self.login_frame, bg=self.colors['bg'])
+        mode_frame.pack(pady=10)
+
+        tk.Radiobutton(
+            mode_frame,
+            text="Login",
+            variable=self.auth_mode,
+            value="login",
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            selectcolor=self.colors['secondary'],
+            activebackground=self.colors['bg'],
+            activeforeground=self.colors['fg']
+        ).pack(side="left", padx=8)
+
+        tk.Radiobutton(
+            mode_frame,
+            text="Register",
+            variable=self.auth_mode,
+            value="register",
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            selectcolor=self.colors['secondary'],
+            activebackground=self.colors['bg'],
+            activeforeground=self.colors['fg']
+        ).pack(side="left", padx=8)
 
         # Button
 
         btn = tk.Button(
             self.login_frame,
-            text="Connect",
+            text="Login",
             command=self.connect_to_server,
             bg=self.colors['accent'],
             fg="white",
@@ -129,6 +161,24 @@ class MAXutkoClient:
             pady=8
         )
         btn.pack(pady=25)
+        self.connect_btn = btn
+
+        def _sync_button_text(*_):
+            self.connect_btn.config(text="Register" if self.auth_mode.get() == "register" else "Login")
+
+        self.auth_mode.trace_add("write", _sync_button_text)
+        _sync_button_text()
+
+        # Status
+
+        self.status_label = tk.Label(
+            self.login_frame,
+            text="",
+            bg=self.colors['bg'],
+            fg=self.colors['accent'],
+            font=self.status_font
+        )
+        self.status_label.pack(pady=5)
 
         self.main_frame.pack(expand=True, fill="both")
 
@@ -138,22 +188,18 @@ class MAXutkoClient:
     def connect_to_server(self):
 
         self.username = self.username_entry.get().strip()
-        server = self.server_entry.get().strip()
+        self.password = self.password_entry.get().strip()
+        self.status_label.config(text="")
 
         if not self.username:
             messagebox.showwarning("Error", "Enter username")
             return
+        if not self.password:
+            messagebox.showwarning("Error", "Enter password")
+            return
 
         if not re.match(r'^[A-Za-z0-9_]+$', self.username):
             messagebox.showwarning("Error", "Only latin, numbers and _")
-            return
-
-        try:
-            host, port = server.split(":")
-            self.host = host
-            self.port = int(port)
-        except:
-            messagebox.showerror("Error", "Wrong server format")
             return
 
         try:
@@ -164,10 +210,38 @@ class MAXutkoClient:
             # SEND LOGIN (IMPORTANT)
 
             login_data = json.dumps({
-                "username": self.username
+                "action": self.auth_mode.get(),
+                "username": self.username,
+                "password": self.password
             }) + "\n"
 
             self.client_socket.send(login_data.encode())
+
+            # Wait auth response
+            buffer = ""
+            while "\n" not in buffer:
+                data = self.client_socket.recv(1024).decode()
+                if not data:
+                    raise Exception("Server закрыт")
+                buffer += data
+
+            line, rest = buffer.split("\n", 1)
+            resp = json.loads(line)
+
+            if resp.get("type") != "auth" or resp.get("status") != "ok":
+                msg = resp.get("message", "Auth failed")
+                self.client_socket.close()
+                messagebox.showerror("Error", msg)
+                return
+
+            # Registration: show notice and return to login screen
+            if self.auth_mode.get() == "register":
+                self.client_socket.close()
+                self.show_login_screen()
+                self.status_label.config(text="Welcome!")
+                return
+
+            self.prebuffer = rest
 
             self.running = True
 
@@ -304,7 +378,8 @@ class MAXutkoClient:
 
     def receive_messages(self):
 
-        buffer = ""
+        buffer = self.prebuffer
+        self.prebuffer = ""
 
         while self.running:
 
