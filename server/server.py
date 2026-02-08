@@ -700,7 +700,8 @@ class MAXutkoServer:
                                     if isinstance(about, str):
                                         profile["about"] = about[:500]
                                     if isinstance(avatar, str):
-                                        profile["avatar"] = avatar
+                                        if len(avatar) <= 250_000:
+                                            profile["avatar"] = avatar
                                     acc["profile"] = profile
                                     self.accounts[username] = acc
                                     self.save_accounts()

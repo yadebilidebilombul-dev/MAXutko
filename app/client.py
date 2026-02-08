@@ -107,6 +107,43 @@ class AvatarLabel(QtWidgets.QLabel):
             painter.drawText(rect, QtCore.Qt.AlignCenter, self.text())
 
 
+class AvatarEncodeWorker(QtCore.QThread):
+    completed = QtCore.pyqtSignal(str)
+    failed = QtCore.pyqtSignal(str)
+
+    def __init__(self, file_path, max_side=256, max_bytes=250_000):
+        super().__init__()
+        self.file_path = file_path
+        self.max_side = max_side
+        self.max_bytes = max_bytes
+
+    def run(self):
+        try:
+            pixmap = QtGui.QPixmap(self.file_path)
+            if pixmap.isNull():
+                self.failed.emit("?? ??????? ????????? ???????????")
+                return
+            if pixmap.width() > self.max_side or pixmap.height() > self.max_side:
+                pixmap = pixmap.scaled(
+                    self.max_side,
+                    self.max_side,
+                    QtCore.Qt.KeepAspectRatio,
+                    QtCore.Qt.SmoothTransformation
+                )
+            byte_array = QtCore.QByteArray()
+            buffer = QtCore.QBuffer(byte_array)
+            buffer.open(QtCore.QIODevice.WriteOnly)
+            pixmap.save(buffer, "PNG")
+            data = byte_array.data()
+            if len(data) > self.max_bytes:
+                self.failed.emit("?????? ??????? ???????. ???????? ??????????? ????????.")
+                return
+            b64 = base64.b64encode(data).decode("ascii")
+            self.completed.emit(f"data:image/png;base64,{b64}")
+        except Exception:
+            self.failed.emit("?????? ????????? ???????")
+
+
 class ProfileDialog(QtWidgets.QDialog):
     def __init__(self, parent, owner_username, target_username, is_self):
         super().__init__(parent)
@@ -571,6 +608,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _pixmap_to_data_url(self, pixmap):
         if pixmap is None or pixmap.isNull():
             return ""
+        max_side = 256
+        if pixmap.width() > max_side or pixmap.height() > max_side:
+            pixmap = pixmap.scaled(
+                max_side,
+                max_side,
+                QtCore.Qt.KeepAspectRatio,
+                QtCore.Qt.SmoothTransformation
+            )
         byte_array = QtCore.QByteArray()
         buffer = QtCore.QBuffer(byte_array)
         buffer.open(QtCore.QIODevice.WriteOnly)
@@ -599,6 +644,25 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             "note": note
         })
 
+    def _start_avatar_worker(self, dialog, file_path):
+        worker = AvatarEncodeWorker(file_path)
+        self._avatar_worker = worker
+
+        def on_done(data_url):
+            if dialog.change_avatar_btn:
+                dialog.change_avatar_btn.setEnabled(True)
+            dialog.set_avatar_data(data_url)
+            dialog._update_title()
+
+        def on_fail(message):
+            if dialog.change_avatar_btn:
+                dialog.change_avatar_btn.setEnabled(True)
+            QtWidgets.QMessageBox.warning(self, "??????", message)
+
+        worker.completed.connect(on_done)
+        worker.failed.connect(on_fail)
+        worker.start()
+
     def _choose_avatar(self, dialog):
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
@@ -608,13 +672,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         )
         if not file_path:
             return
-        pixmap = QtGui.QPixmap(file_path)
-        if pixmap.isNull():
-            QtWidgets.QMessageBox.warning(self, "??????", "?? ??????? ????????? ???????????")
-            return
-        data_url = self._pixmap_to_data_url(pixmap)
-        dialog.set_avatar_data(data_url)
-        dialog._update_title()
+        dialog.change_avatar_btn.setEnabled(False) if dialog.change_avatar_btn else None
+        self._start_avatar_worker(dialog, file_path)
 
     # ================= CONNECT =================
 
