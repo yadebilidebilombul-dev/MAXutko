@@ -5,7 +5,7 @@ a = Analysis(
     ['app\\client.py'],
     pathex=[],
     binaries=[],
-    datas=[('app\\ui.qss', 'app')],
+    datas=[('app\\ui.qss', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

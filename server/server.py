@@ -57,11 +57,19 @@ class MAXutkoServer:
 
         self.pending = {}  # username -> {email, salt, hash, code, expires_at}
         self.pending_lock = threading.Lock()
+        self.reset_pending = {}  # username -> {email, code, expires_at}
+        self.reset_pending_lock = threading.Lock()
+        self.tokens_path = os.path.join(os.path.dirname(__file__), "tokens.json")
+        self.tokens_lock = threading.Lock()
+        self.tokens = self.load_tokens()
+        self.token_ttl_seconds = 30 * 24 * 60 * 60
 
         self.username_re = re.compile(r'^[A-Za-z0-9_]+$')
         self.email_re = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
         self.mailer = MailSender()
+        self.rate_limits = {}
+        self.rate_limits_lock = threading.Lock()
 
 
     # ================= ACCOUNTS =================
@@ -109,6 +117,54 @@ class MAXutkoServer:
         with open(self.accounts_path, "w", encoding="utf-8") as f:
             json.dump(self.accounts, f, ensure_ascii=False, indent=2)
 
+    def load_tokens(self):
+        if not os.path.exists(self.tokens_path):
+            return {}
+        try:
+            with open(self.tokens_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                now = time.time()
+                cleaned = {}
+                for token, item in data.items():
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("expires_at", 0) > now and item.get("username"):
+                        cleaned[token] = item
+                return cleaned
+        except:
+            pass
+        return {}
+
+    def save_tokens(self):
+        with open(self.tokens_path, "w", encoding="utf-8") as f:
+            json.dump(self.tokens, f, ensure_ascii=False, indent=2)
+
+    def _issue_token(self, username):
+        token = secrets.token_hex(24)
+        expires_at = time.time() + self.token_ttl_seconds
+        with self.tokens_lock:
+            to_remove = [t for t, v in self.tokens.items() if v.get("username") == username]
+            for t in to_remove:
+                self.tokens.pop(t, None)
+            self.tokens[token] = {"username": username, "expires_at": expires_at}
+            self.save_tokens()
+        return token
+
+    def _username_by_token(self, token):
+        if not token:
+            return None
+        now = time.time()
+        with self.tokens_lock:
+            item = self.tokens.get(token)
+            if not item:
+                return None
+            if item.get("expires_at", 0) <= now:
+                self.tokens.pop(token, None)
+                self.save_tokens()
+                return None
+            return item.get("username")
+
 
     def _hash_password(self, password, salt):
 
@@ -140,16 +196,43 @@ class MAXutkoServer:
         }
         self.save_accounts()
 
+    def _email_in_use(self, email, exclude_username=None):
+        if not email:
+            return False
+        target = email.strip().lower()
+        with self.accounts_lock:
+            for name, acc in self.accounts.items():
+                if exclude_username and name == exclude_username:
+                    continue
+                acc_email = (acc.get("email") or "").strip().lower()
+                if acc_email and acc_email == target:
+                    return True
+        return False
 
-    def send_auth(self, client, status, message=""):
+
+    def send_auth(self, client, status, message="", token=""):
 
         data = {
             "type": "auth",
             "status": status,
             "message": message
         }
+        if token:
+            data["token"] = token
 
         client.send((json.dumps(data) + "\n").encode())
+
+    def _rate_limit(self, key, limit, window_seconds):
+        now = time.time()
+        with self.rate_limits_lock:
+            bucket = self.rate_limits.setdefault(key, [])
+            bucket = [t for t in bucket if now - t < window_seconds]
+            if len(bucket) >= limit:
+                self.rate_limits[key] = bucket
+                return False
+            bucket.append(now)
+            self.rate_limits[key] = bucket
+            return True
 
     # ================= NOTES =================
 
@@ -464,16 +547,17 @@ class MAXutkoServer:
 
             threading.Thread(
                 target=self.handle_client,
-                args=(client,),
+                args=(client, addr),
                 daemon=True
             ).start()
 
 
     # ================= CLIENT =================
 
-    def handle_client(self, client):
+    def handle_client(self, client, addr):
 
         buffer = ""
+        ip = addr[0] if addr else "unknown"
 
         try:
             # ---- LOGIN ----
@@ -496,9 +580,20 @@ class MAXutkoServer:
             password = login.get("password", "")
             email = login.get("email", "").strip()
             action = login.get("action", "login")
+            token = login.get("token", "")
 
-            if not username or not password:
-                self.send_auth(client, "error", "Missing username or password")
+            if action == "token_login":
+                if not self._rate_limit(f"auth:token:{ip}", 5, 30):
+                    self.send_auth(client, "error", "Too many attempts")
+                    client.close()
+                    return
+                username = self._username_by_token(token)
+                if not username:
+                    self.send_auth(client, "error", "Invalid token")
+                    client.close()
+                    return
+            elif not username:
+                self.send_auth(client, "error", "Missing username")
                 client.close()
                 return
 
@@ -507,17 +602,33 @@ class MAXutkoServer:
                 client.close()
                 return
 
-            if action not in ("login", "register"):
+            if action not in ("login", "register", "reset_request", "token_login"):
                 self.send_auth(client, "error", "Invalid action")
+                client.close()
+                return
+
+            if action not in ("reset_request", "token_login") and not password:
+                self.send_auth(client, "error", "Missing username or password")
                 client.close()
                 return
 
             # ---- AUTH ----
 
+            if action in ("login", "register", "reset_request"):
+                if not self._rate_limit(f"auth:{action}:{ip}", 10, 60):
+                    self.send_auth(client, "error", "Too many attempts")
+                    client.close()
+                    return
+
             if action == "register":
 
                 if not email or not self.email_re.fullmatch(email):
                     self.send_auth(client, "error", "Invalid email")
+                    client.close()
+                    return
+
+                if self._email_in_use(email):
+                    self.send_auth(client, "error", "Email already in use")
                     client.close()
                     return
 
@@ -560,6 +671,9 @@ class MAXutkoServer:
                         continue
 
                     verify = json.loads(line)
+                    if not self._rate_limit(f"register_verify:{ip}", 10, 60):
+                        self.send_auth(client, "error", "Too many attempts")
+                        continue
                     if verify.get("action") != "verify":
                         self.send_auth(client, "error", "Invalid action")
                         client.close()
@@ -602,7 +716,119 @@ class MAXutkoServer:
                     client.close()
                     return
 
-            else:
+            elif action == "reset_request":
+
+                if not email or not self.email_re.fullmatch(email):
+                    self.send_auth(client, "error", "Invalid email")
+                    client.close()
+                    return
+
+                with self.accounts_lock:
+                    stored = self.accounts.get(username)
+
+                if not stored:
+                    self.send_auth(client, "error", "User not found")
+                    client.close()
+                    return
+
+                stored_email = (stored.get("email") or "").strip().lower()
+                if stored_email != email.lower():
+                    self.send_auth(client, "error", "Email mismatch")
+                    client.close()
+                    return
+
+                code = CodeGenerator.generate_code(6)
+                expires_at = time.time() + 300
+
+                with self.reset_pending_lock:
+                    self.reset_pending[username] = {
+                        "email": email,
+                        "code": code,
+                        "expires_at": expires_at
+                    }
+
+                self.mailer.send_code(email, code)
+                self.send_auth(client, "need_code", "Code sent to email")
+
+                while True:
+                    data = client.recv(1024).decode()
+                    if not data:
+                        client.close()
+                        return
+
+                    buffer += data
+                    if "\n" not in buffer:
+                        continue
+
+                    line, buffer = buffer.split("\n", 1)
+                    if not line.strip():
+                        continue
+
+                    verify = json.loads(line)
+                    if not self._rate_limit(f"reset:{ip}", 10, 60):
+                        self.send_auth(client, "error", "Too many attempts")
+                        continue
+                    action2 = verify.get("action")
+                    if action2 not in ("reset_check", "reset_verify"):
+                        self.send_auth(client, "error", "Invalid action")
+                        client.close()
+                        return
+
+                    v_user = verify.get("username", "").strip()
+                    v_code = verify.get("code", "").strip()
+
+                    with self.reset_pending_lock:
+                        pending = self.reset_pending.get(v_user)
+
+                        if not pending:
+                            self.send_auth(client, "error", "No pending code")
+                            continue
+
+                        if time.time() > pending["expires_at"]:
+                            del self.reset_pending[v_user]
+                            self.send_auth(client, "error", "Code expired")
+                            continue
+
+                        if v_code and v_code != pending["code"]:
+                            self.send_auth(client, "error", "Wrong code")
+                            continue
+
+                        if action2 == "reset_check":
+                            pending["verified"] = True
+                            self.reset_pending[v_user] = pending
+                            self.send_auth(client, "ok", "Code verified")
+                            continue
+
+                        if not v_code and not pending.get("verified"):
+                            self.send_auth(client, "error", "Wrong code")
+                            continue
+
+                        del self.reset_pending[v_user]
+
+                    new_password = verify.get("password", "")
+                    if not new_password:
+                        self.send_auth(client, "error", "Missing password")
+                        continue
+
+                    salt = secrets.token_hex(16)
+                    pw_hash = self._hash_password(new_password, salt)
+
+                    with self.accounts_lock:
+                        acc = self.accounts.get(v_user)
+                        if not acc:
+                            self.send_auth(client, "error", "User not found")
+                            client.close()
+                            return
+                        acc["salt"] = salt
+                        acc["hash"] = pw_hash
+                        self.accounts[v_user] = acc
+                        self.save_accounts()
+
+                    self.send_auth(client, "ok", "Password reset")
+                    client.close()
+                    return
+
+            elif action == "login":
                 with self.accounts_lock:
                     stored = self.accounts.get(username)
 
@@ -615,6 +841,9 @@ class MAXutkoServer:
                     self.send_auth(client, "error", "Wrong password")
                     client.close()
                     return
+            else:
+                # token_login already validated
+                pass
 
             # ---- REGISTER CLIENT ----
 
@@ -628,7 +857,8 @@ class MAXutkoServer:
 
                 self.clients[client] = username
 
-            self.send_auth(client, "ok")
+            token_value = self._issue_token(username)
+            self.send_auth(client, "ok", token=token_value)
 
             print(f"[+] {username} logged in")
 

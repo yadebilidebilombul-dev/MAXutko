@@ -1570,5 +1570,71 @@
     "message": "111 left the chat",
     "timestamp": "",
     "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "test joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "test",
+    "message": "hi",
+    "timestamp": "19:53:36",
+    "type": "message"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
   }
 ]

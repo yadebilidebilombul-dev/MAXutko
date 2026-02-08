@@ -13,10 +13,10 @@ SERVER_PORT = 5555
 
 
 class AuthWorker(QtCore.QThread):
-    success = QtCore.pyqtSignal(object, str)
+    success = QtCore.pyqtSignal(object, dict, str)
     error = QtCore.pyqtSignal(str)
 
-    def __init__(self, host, port, username, password, email, mode):
+    def __init__(self, host, port, username, password, email, mode, token=""):
         super().__init__()
         self.host = host
         self.port = port
@@ -24,6 +24,7 @@ class AuthWorker(QtCore.QThread):
         self.password = password
         self.email = email
         self.mode = mode
+        self.token = token
 
     def run(self):
         try:
@@ -33,7 +34,8 @@ class AuthWorker(QtCore.QThread):
                 "action": self.mode,
                 "username": self.username,
                 "password": self.password,
-                "email": self.email
+                "email": self.email,
+                "token": self.token
             }) + "\n"
             sock.send(login_data.encode())
 
@@ -51,16 +53,16 @@ class AuthWorker(QtCore.QThread):
                 raise Exception("Auth failed")
 
             if resp.get("status") == "need_code":
-                self.success.emit(sock, "need_code")
+                self.success.emit(sock, resp, "")
                 return
 
             if resp.get("status") != "ok":
-                msg = resp.get("message", "?? ??????? ?????")
+                msg = resp.get("message", "Не удалось войти")
                 sock.close()
                 self.error.emit(msg)
                 return
 
-            self.success.emit(sock, rest)
+            self.success.emit(sock, resp, rest)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -246,7 +248,7 @@ class AvatarEncodeWorker(QtCore.QThread):
         try:
             pixmap = QtGui.QPixmap(self.file_path)
             if pixmap.isNull():
-                self.failed.emit("?? ??????? ????????? ???????????")
+                self.failed.emit("Не удалось загрузить изображение")
                 return
             if pixmap.width() > self.max_side or pixmap.height() > self.max_side:
                 pixmap = pixmap.scaled(
@@ -261,12 +263,12 @@ class AvatarEncodeWorker(QtCore.QThread):
             pixmap.save(buffer, "PNG")
             data = byte_array.data()
             if len(data) > self.max_bytes:
-                self.failed.emit("?????? ??????? ???????. ???????? ??????????? ????????.")
+                self.failed.emit("Слишком большой размер файла. Пожалуйста, уменьшите изображение.")
                 return
             b64 = base64.b64encode(data).decode("ascii")
             self.completed.emit(f"data:image/png;base64,{b64}")
         except Exception:
-            self.failed.emit("?????? ????????? ???????")
+            self.failed.emit("Ошибка обработки файла")
 
 
 class ProfileDialog(QtWidgets.QDialog):
@@ -423,6 +425,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.receiver_thread = None
         self.sender_thread = None
         self.auth_worker = None
+        self._reset_pending_code = ""
+        self._reset_pending_username = ""
+        self._reset_pending_email = ""
         self.chat_mode = "group"
         self.dm_target = None
         self.conversations = {"group": []}
@@ -433,9 +438,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.profile_dialogs = {}
         self.avatar_cache_path = os.path.join(os.path.dirname(__file__), "avatar_cache.json")
         self.avatar_cache = self._load_avatar_cache()
+        self.auth_token_path = os.path.join(os.path.dirname(__file__), "auth_token.json")
 
         self.setup_ui()
         self.show_login_screen()
+        self._attempt_token_login()
 
     # ================= UI =================
 
@@ -450,11 +457,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.layout.addWidget(self.stack)
 
         self.login_page = QtWidgets.QWidget()
+        self.reset_step1_page = QtWidgets.QWidget()
+        self.reset_step2_page = QtWidgets.QWidget()
         self.chat_page = QtWidgets.QWidget()
         self.stack.addWidget(self.login_page)
+        self.stack.addWidget(self.reset_step1_page)
+        self.stack.addWidget(self.reset_step2_page)
         self.stack.addWidget(self.chat_page)
 
         self._build_login_page()
+        self._build_reset_step1_page()
+        self._build_reset_step2_page()
         self._build_chat_page()
 
         self._load_qss()
@@ -538,11 +551,26 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         mode_layout.addStretch(1)
         card_layout.addWidget(mode_row)
 
+        # Remember me
+        self.remember_checkbox = QtWidgets.QCheckBox("Запомнить меня")
+        self.remember_checkbox.setObjectName("mutedLabel")
+        card_layout.addWidget(self.remember_checkbox)
+
         # Button
         self.connect_btn = QtWidgets.QPushButton("Войти")
         self.connect_btn.setObjectName("primaryButton")
         self.connect_btn.clicked.connect(self.connect_to_server)
         card_layout.addWidget(self.connect_btn)
+
+        # Reset password button
+        self.reset_btn = QtWidgets.QPushButton("Сменить пароль")
+        self.reset_btn.setObjectName("ghostButton")
+        self.reset_btn.clicked.connect(self.show_reset_step1_screen)
+        reset_row = QtWidgets.QHBoxLayout()
+        reset_row.setContentsMargins(0, 0, 0, 0)
+        reset_row.addWidget(self.reset_btn, 0, QtCore.Qt.AlignLeft)
+        reset_row.addStretch(1)
+        card_layout.addLayout(reset_row)
 
         # Status
         self.status_label = QtWidgets.QLabel("")
@@ -569,6 +597,121 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         self.email_row.setVisible(False)
         self.code_row.setVisible(False)
+
+    def _build_reset_step1_page(self):
+        root_layout = QtWidgets.QVBoxLayout(self.reset_step1_page)
+        root_layout.setAlignment(QtCore.Qt.AlignCenter)
+
+        card = QtWidgets.QFrame()
+        card.setObjectName("loginCard")
+        card_layout = QtWidgets.QVBoxLayout(card)
+        card_layout.setContentsMargins(24, 22, 24, 22)
+        card_layout.setSpacing(12)
+
+        title = QtWidgets.QLabel("Смена пароля")
+        title.setObjectName("titleLabel")
+        title.setAlignment(QtCore.Qt.AlignCenter)
+        title_font = QtGui.QFont("Segoe UI", 18, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        card_layout.addWidget(title)
+
+        self.reset_username_input = QtWidgets.QLineEdit()
+        self.reset_username_input.setPlaceholderText("Логин")
+        self.reset_username_input.setObjectName("input")
+
+        self.reset_email_input = QtWidgets.QLineEdit()
+        self.reset_email_input.setPlaceholderText("Почта")
+        self.reset_email_input.setObjectName("input")
+
+        card_layout.addWidget(self._labeled("Username:", self.reset_username_input))
+        card_layout.addWidget(self._labeled("Email:", self.reset_email_input))
+
+        self.reset_send_btn = QtWidgets.QPushButton("Отправить код")
+        self.reset_send_btn.setObjectName("primaryButton")
+        self.reset_send_btn.clicked.connect(self._request_password_reset)
+        card_layout.addWidget(self.reset_send_btn)
+
+        self.reset_status_label = QtWidgets.QLabel("")
+        self.reset_status_label.setObjectName("statusLabel")
+        self.reset_status_label.setAlignment(QtCore.Qt.AlignCenter)
+        card_layout.addWidget(self.reset_status_label)
+
+        self.reset_code_row = QtWidgets.QWidget()
+        code_layout = QtWidgets.QHBoxLayout(self.reset_code_row)
+        code_layout.setContentsMargins(0, 0, 0, 0)
+        code_layout.setSpacing(8)
+        self.reset_code_input = QtWidgets.QLineEdit()
+        self.reset_code_input.setPlaceholderText("Код из письма")
+        self.reset_code_input.setObjectName("input")
+        self.reset_verify_btn = QtWidgets.QPushButton("Подтвердить код")
+        self.reset_verify_btn.setObjectName("primaryButton")
+        self.reset_verify_btn.clicked.connect(self._verify_reset_code_step1)
+        code_layout.addWidget(self._labeled("Code:", self.reset_code_input))
+        code_layout.addWidget(self.reset_verify_btn)
+        card_layout.addWidget(self.reset_code_row)
+
+        self.reset_resend_btn = QtWidgets.QPushButton("Отправить код повторно")
+        self.reset_resend_btn.setObjectName("ghostButton")
+        self.reset_resend_btn.clicked.connect(self._resend_reset_code)
+        card_layout.addWidget(self.reset_resend_btn)
+
+        self.reset_back_btn = QtWidgets.QPushButton("Назад к входу")
+        self.reset_back_btn.setObjectName("ghostButton")
+        self.reset_back_btn.clicked.connect(self.show_login_screen)
+        back_row = QtWidgets.QHBoxLayout()
+        back_row.setContentsMargins(0, 0, 0, 0)
+        back_row.addWidget(self.reset_back_btn, 0, QtCore.Qt.AlignLeft)
+        back_row.addStretch(1)
+        card_layout.addLayout(back_row)
+
+        root_layout.addWidget(card, 0, QtCore.Qt.AlignCenter)
+
+        self.reset_code_row.setVisible(False)
+        self.reset_resend_btn.setVisible(False)
+
+    def _build_reset_step2_page(self):
+        root_layout = QtWidgets.QVBoxLayout(self.reset_step2_page)
+        root_layout.setAlignment(QtCore.Qt.AlignCenter)
+
+        card = QtWidgets.QFrame()
+        card.setObjectName("loginCard")
+        card_layout = QtWidgets.QVBoxLayout(card)
+        card_layout.setContentsMargins(24, 22, 24, 22)
+        card_layout.setSpacing(12)
+
+        title = QtWidgets.QLabel("Новый пароль")
+        title.setObjectName("titleLabel")
+        title.setAlignment(QtCore.Qt.AlignCenter)
+        title_font = QtGui.QFont("Segoe UI", 18, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        card_layout.addWidget(title)
+
+        self.reset_new_password_input = QtWidgets.QLineEdit()
+        self.reset_new_password_input.setPlaceholderText("Новый пароль")
+        self.reset_new_password_input.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.reset_new_password_input.setObjectName("input")
+        card_layout.addWidget(self._labeled("Password:", self.reset_new_password_input))
+
+        self.reset_change_btn = QtWidgets.QPushButton("Сменить пароль")
+        self.reset_change_btn.setObjectName("dangerButton")
+        self.reset_change_btn.clicked.connect(self._verify_reset_code_step2)
+        card_layout.addWidget(self.reset_change_btn)
+
+        self.reset_step2_status = QtWidgets.QLabel("")
+        self.reset_step2_status.setObjectName("statusLabel")
+        self.reset_step2_status.setAlignment(QtCore.Qt.AlignCenter)
+        card_layout.addWidget(self.reset_step2_status)
+
+        self.reset_step2_back_btn = QtWidgets.QPushButton("Назад к коду")
+        self.reset_step2_back_btn.setObjectName("ghostButton")
+        self.reset_step2_back_btn.clicked.connect(self.show_reset_step1_screen)
+        back_row = QtWidgets.QHBoxLayout()
+        back_row.setContentsMargins(0, 0, 0, 0)
+        back_row.addWidget(self.reset_step2_back_btn, 0, QtCore.Qt.AlignLeft)
+        back_row.addStretch(1)
+        card_layout.addLayout(back_row)
+
+        root_layout.addWidget(card, 0, QtCore.Qt.AlignCenter)
 
     def _build_chat_page(self):
         layout = QtWidgets.QVBoxLayout(self.chat_page)
@@ -684,6 +827,15 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def show_login_screen(self, status_text=""):
         self.status_label.setText(status_text)
+        if self.pending_socket:
+            try:
+                self.pending_socket.close()
+            except Exception:
+                pass
+            self.pending_socket = None
+        self._reset_pending_code = ""
+        self._reset_pending_username = ""
+        self._reset_pending_email = ""
         self.stack.setCurrentWidget(self.login_page)
         self.message_input.clear()
         self._clear_messages()
@@ -700,6 +852,21 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             except Exception:
                 pass
         self.profile_dialogs = {}
+
+    def show_reset_step1_screen(self):
+        self.reset_status_label.setText("")
+        self.reset_code_input.clear()
+        self.reset_code_row.setVisible(False)
+        self.reset_resend_btn.setVisible(False)
+        self.reset_send_btn.setEnabled(True)
+        self.reset_verify_btn.setEnabled(True)
+        self.stack.setCurrentWidget(self.reset_step1_page)
+
+    def show_reset_step2_screen(self):
+        self.reset_step2_status.setText("")
+        self.reset_new_password_input.clear()
+        self.reset_change_btn.setEnabled(True)
+        self.stack.setCurrentWidget(self.reset_step2_page)
 
     def show_chat_screen(self):
         self._update_user_label()
@@ -723,6 +890,85 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 json.dump(self.avatar_cache, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
+
+    def _load_saved_token(self):
+        try:
+            if os.path.exists(self.auth_token_path):
+                with open(self.auth_token_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data.get("token", "")
+        except Exception:
+            pass
+        return ""
+
+    def _save_token(self, token):
+        try:
+            with open(self.auth_token_path, "w", encoding="utf-8") as f:
+                json.dump({"token": token}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _clear_saved_token(self):
+        try:
+            if os.path.exists(self.auth_token_path):
+                os.remove(self.auth_token_path)
+        except Exception:
+            pass
+
+    def _attempt_token_login(self):
+        token = self._load_saved_token()
+        if not token:
+            return
+        self.status_label.setText("Автовход...")
+        self.connect_btn.setEnabled(False)
+        self.auth_worker = AuthWorker(
+            self.host,
+            self.port,
+            "",
+            "",
+            "",
+            "token_login",
+            token=token
+        )
+
+        def on_success(sock, resp, rest):
+            self.connect_btn.setEnabled(True)
+            if resp.get("status") != "ok":
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                self.status_label.setText("")
+                self._clear_saved_token()
+                return
+
+            token = resp.get("token", "")
+            if token:
+                self._save_token(token)
+
+            self.client_socket = sock
+            self.prebuffer = rest
+            self.running = True
+            self.show_chat_screen()
+
+            self.sender_thread = SenderThread(self.client_socket)
+            self.sender_thread.error.connect(lambda _err: None)
+            self.sender_thread.start()
+
+            self.receiver_thread = ReceiverThread(self.client_socket, self.prebuffer)
+            self.receiver_thread.message_received.connect(self.display_message)
+            self.receiver_thread.connection_lost.connect(self.connection_lost)
+            self.receiver_thread.start()
+
+        def on_error(_message):
+            self.connect_btn.setEnabled(True)
+            self.status_label.setText("")
+            self._clear_saved_token()
+
+        self.auth_worker.success.connect(on_success)
+        self.auth_worker.error.connect(on_error)
+        self.auth_worker.start()
 
     def _send_action(self, payload):
         if not self.sender_thread:
@@ -804,7 +1050,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         def on_fail(message):
             if dialog.change_avatar_btn:
                 dialog.change_avatar_btn.setEnabled(True)
-            QtWidgets.QMessageBox.warning(self, "??????", message)
+            QtWidgets.QMessageBox.warning(self, "Ошибка", message)
 
         worker.completed.connect(on_done)
         worker.failed.connect(on_fail)
@@ -814,7 +1060,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _choose_avatar(self, dialog):
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
-            "???????? ??????",
+            "Выберите изображение",
             "",
             "Images (*.png *.jpg *.jpeg *.bmp *.gif)"
         )
@@ -839,21 +1085,21 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.status_label.setText("")
 
         if not self.username:
-            QtWidgets.QMessageBox.warning(self, "??????", "??????? ?????")
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите логин")
             return
         if not self.password:
-            QtWidgets.QMessageBox.warning(self, "??????", "??????? ??????")
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите пароль")
             return
         if self.auth_mode == "register" and not self.email:
-            QtWidgets.QMessageBox.warning(self, "??????", "??????? ?????")
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите почту")
             return
 
         if not re.match(r'^[A-Za-z0-9_]+$', self.username):
-            QtWidgets.QMessageBox.warning(self, "??????", "????????? ????????, ????? ? _")
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Допустимы латиница, цифры и _")
             return
 
         self.connect_btn.setEnabled(False)
-        self.status_label.setText("???????????...")
+        self.status_label.setText("Подключение...")
 
         self.auth_worker = AuthWorker(
             self.host,
@@ -864,11 +1110,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.auth_mode
         )
 
-        def on_success(sock, rest_or_status):
+        def on_success(sock, resp, rest_or_status):
             self.connect_btn.setEnabled(True)
-            if rest_or_status == "need_code":
+            if resp.get("status") == "need_code":
                 self.pending_socket = sock
-                self.status_label.setText("??? ????????? ?? ?????")
+                self.status_label.setText("Мы отправили код на почту")
                 self.code_row.setVisible(True)
                 self.connect_btn.setEnabled(False)
                 return
@@ -887,14 +1133,77 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.receiver_thread.connection_lost.connect(self.connection_lost)
             self.receiver_thread.start()
 
+            token = resp.get("token", "")
+            if token and self.remember_checkbox.isChecked():
+                self._save_token(token)
+            elif not self.remember_checkbox.isChecked():
+                self._clear_saved_token()
+
         def on_error(message):
             self.connect_btn.setEnabled(True)
             self.status_label.setText("")
-            QtWidgets.QMessageBox.critical(self, "??????", message)
+            QtWidgets.QMessageBox.critical(self, "Ошибка", message)
 
         self.auth_worker.success.connect(on_success)
         self.auth_worker.error.connect(on_error)
         self.auth_worker.start()
+
+    def _request_password_reset(self):
+        username = self.reset_username_input.text().strip()
+        email = self.reset_email_input.text().strip()
+        if not username:
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите логин")
+            return
+        if not email:
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите почту")
+            return
+        if not re.match(r'^[A-Za-z0-9_]+$', username):
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Допустимы латиница, цифры и _")
+            return
+
+        self.reset_send_btn.setEnabled(False)
+        self.reset_resend_btn.setEnabled(False)
+        self.reset_status_label.setText("Отправка кода...")
+
+        self.auth_worker = AuthWorker(
+            self.host,
+            self.port,
+            username,
+            "",
+            email,
+            "reset_request"
+        )
+
+        def on_success(sock, resp, rest_or_status):
+            if resp.get("status") == "need_code":
+                self.pending_socket = sock
+                self.reset_status_label.setText("Мы отправили код на почту")
+                self.reset_code_row.setVisible(True)
+                self.reset_resend_btn.setVisible(True)
+                self.reset_send_btn.setEnabled(True)
+                self.reset_resend_btn.setEnabled(True)
+                self._reset_pending_username = username
+                self._reset_pending_email = email
+                return
+            try:
+                sock.close()
+            except Exception:
+                pass
+            self.reset_send_btn.setEnabled(True)
+            self.reset_resend_btn.setEnabled(True)
+
+        def on_error(message):
+            self.reset_send_btn.setEnabled(True)
+            self.reset_resend_btn.setEnabled(True)
+            self.reset_status_label.setText("")
+            QtWidgets.QMessageBox.critical(self, "Ошибка", message)
+
+        self.auth_worker.success.connect(on_success)
+        self.auth_worker.error.connect(on_error)
+        self.auth_worker.start()
+
+    def _resend_reset_code(self):
+        self._request_password_reset()
 
     def verify_code(self):
         code = self.code_input.text().strip()
@@ -940,6 +1249,97 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         except Exception as e:
             self.status_label.setText(str(e))
+
+    def _verify_reset_code_step1(self):
+        code = self.reset_code_input.text().strip()
+        if not code:
+            self.reset_status_label.setText("Введите код")
+            return
+
+        try:
+            if not self.pending_socket:
+                self.reset_status_label.setText("Нет ожидающей проверки")
+                return
+
+            username = self.reset_username_input.text().strip()
+            data = json.dumps({
+                "action": "reset_check",
+                "username": username,
+                "code": code
+            }) + "\n"
+
+            self.pending_socket.send(data.encode())
+
+            buffer = ""
+            while "\n" not in buffer:
+                chunk = self.pending_socket.recv(1024).decode()
+                if not chunk:
+                    raise Exception("Server closed")
+                buffer += chunk
+
+            line, _ = buffer.split("\n", 1)
+            resp = json.loads(line)
+
+            if resp.get("status") == "ok":
+                self._reset_pending_code = code
+                self.show_reset_step2_screen()
+                return
+
+            msg = resp.get("message", "Код не подошёл")
+            self.reset_status_label.setText(msg)
+
+        except Exception as e:
+            self.reset_status_label.setText(str(e))
+
+    def _verify_reset_code_step2(self):
+        new_password = self.reset_new_password_input.text().strip()
+        if not new_password:
+            self.reset_step2_status.setText("Введите новый пароль")
+            return
+        if not getattr(self, "_reset_pending_code", ""):
+            self.reset_step2_status.setText("Сначала подтвердите код")
+            return
+
+        try:
+            if not self.pending_socket:
+                self.reset_step2_status.setText("Нет ожидающей проверки")
+                return
+
+            username = self.reset_username_input.text().strip()
+            data = json.dumps({
+                "action": "reset_verify",
+                "username": username,
+                "code": self._reset_pending_code,
+                "password": new_password
+            }) + "\n"
+
+            self.pending_socket.send(data.encode())
+
+            buffer = ""
+            while "\n" not in buffer:
+                chunk = self.pending_socket.recv(1024).decode()
+                if not chunk:
+                    raise Exception("Server closed")
+                buffer += chunk
+
+            line, _ = buffer.split("\n", 1)
+            resp = json.loads(line)
+
+            if resp.get("status") == "ok":
+                try:
+                    self.pending_socket.close()
+                except Exception:
+                    pass
+                self.pending_socket = None
+                self._reset_pending_code = ""
+                self.show_login_screen("Пароль обновлен. Можно входить.")
+                return
+
+            msg = resp.get("message", "Код не подошёл")
+            self.reset_step2_status.setText(msg)
+
+        except Exception as e:
+            self.reset_step2_status.setText(str(e))
 
     # ================= SEND =================
 
@@ -1047,10 +1447,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if tp == "dm":
                 if is_me:
                     target_name = self._display_name(data.get("to", ""))
-                    name = f"You ? {target_name}".strip()
+                    name = f"You -> {target_name}".strip()
                 else:
                     sender_name = self._display_name(user)
-                    name = f"{sender_name} ? You"
+                    name = f"{sender_name} -> You"
             else:
                 name = "You" if is_me else self._display_name(user)
             meta_text = f"{name} • {time}".strip()

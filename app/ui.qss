@@ -190,6 +190,15 @@ QScrollArea {
     color: #2563eb;
 }
 
+#linkLabel {
+    color: #2563eb;
+    font-size: 9pt;
+}
+
+#linkLabel:hover {
+    color: #1d4ed8;
+}
+
 #mutedLabel {
     color: #6b7280;
 }
