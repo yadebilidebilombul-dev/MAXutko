@@ -11,6 +11,8 @@ import secrets
 import queue
 import getpass
 from PyQt5 import QtCore, QtWidgets, QtGui
+from overlay_utils import OverlayController
+from notifications import WindowsNotifier, PopupNotifier
 
 SERVER_HOST = "26.202.145.247"
 SERVER_PORT = 5555
@@ -363,7 +365,9 @@ class AvatarEncodeWorker(QtCore.QThread):
 
 
 class ProfileDialog(QtWidgets.QDialog):
-    def __init__(self, parent, owner_username, target_username, is_self, is_admin, clans):
+    closed = QtCore.pyqtSignal()
+
+    def __init__(self, parent, owner_username, target_username, is_self, is_admin, clans, embedded=False):
         super().__init__(parent)
         self.owner_username = owner_username
         self.target_username = target_username
@@ -371,17 +375,23 @@ class ProfileDialog(QtWidgets.QDialog):
         self.is_admin = is_admin
         self.clans = list(clans or [])
         self.avatar_data = ""
+        self._embedded = bool(embedded)
 
         self.setWindowTitle("Профиль пользователя")
-        self.setModal(True)
-        self.setMinimumWidth(360)
+        if self._embedded:
+            self.setWindowFlags(QtCore.Qt.Widget)
+        else:
+            self.setModal(True)
+        self.setMinimumWidth(390)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
+        layout.setAlignment(QtCore.Qt.AlignTop)
 
         header = QtWidgets.QHBoxLayout()
         header.setSpacing(10)
+        header.setAlignment(QtCore.Qt.AlignTop)
 
         self.avatar_label = AvatarLabel(self)
         self.avatar_label.setFixedSize(72, 72)
@@ -390,9 +400,10 @@ class ProfileDialog(QtWidgets.QDialog):
         font.setPixelSize(18)
         self.avatar_label.setFont(font)
         self.avatar_label.setAlignment(QtCore.Qt.AlignCenter)
-        header.addWidget(self.avatar_label)
+        header.addWidget(self.avatar_label, 0, QtCore.Qt.AlignTop)
 
         title_box = QtWidgets.QVBoxLayout()
+        title_box.setAlignment(QtCore.Qt.AlignTop)
         title_row = QtWidgets.QHBoxLayout()
         title_row.setSpacing(6)
         self.title_label = QtWidgets.QLabel("")
@@ -420,7 +431,7 @@ class ProfileDialog(QtWidgets.QDialog):
         self.username_label = QtWidgets.QLabel(f"@{self.target_username}")
         self.username_label.setObjectName("mutedLabel")
         title_box.addWidget(self.username_label)
-        title_box.addStretch(1)
+        title_box.addStretch(0)
 
         header.addLayout(title_box, 1)
 
@@ -494,10 +505,19 @@ class ProfileDialog(QtWidgets.QDialog):
 
         self.close_btn = QtWidgets.QPushButton("Закрыть")
         self.close_btn.setObjectName("primaryButton")
-        self.close_btn.clicked.connect(self.accept)
+        if self._embedded:
+            self.close_btn.setVisible(False)
+        else:
+            self.close_btn.clicked.connect(self.accept)
         actions.addWidget(self.close_btn)
 
+        layout.addStretch(1)
         layout.addLayout(actions)
+
+    def closeEvent(self, event):
+        if self._embedded:
+            self.closed.emit()
+        super().closeEvent(event)
 
     def set_profile(self, profile):
         nick = (profile.get("nick") or "").strip()
@@ -614,9 +634,16 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.profile_dialogs = {}
         self.avatar_cache_path = os.path.join(os.path.dirname(__file__), "avatar_cache.json")
         self.avatar_cache = self._load_avatar_cache()
+        self.download_cache_path = os.path.join(os.path.dirname(__file__), "downloads_cache.json")
+        self.download_cache = self._load_download_cache()
         self.auth_token_path = os.path.join(os.path.dirname(__file__), "auth_token.json")
         self.auth_tokens_path = os.path.join(os.path.dirname(__file__), "auth_tokens.json")
         self.auth_tokens = self._load_saved_tokens()
+        self.settings_path = os.path.join(os.path.dirname(__file__), "settings.json")
+        self.settings = self._load_settings()
+        self.use_windows_notifications = bool(self.settings.get("windows_notifications", True))
+        self.notifier = None
+        self.popup_notifier = None
         self.search_timer = QtCore.QTimer(self)
         self.search_timer.setSingleShot(True)
         self.search_timer.setInterval(300)
@@ -910,6 +937,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         layout.setSpacing(10)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        self.chat_content = QtWidgets.QWidget()
+        content_layout = QtWidgets.QVBoxLayout(self.chat_content)
+        content_layout.setSpacing(10)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
         # Top bar
         top_bar = QtWidgets.QFrame()
         top_bar.setObjectName("topBar")
@@ -979,17 +1011,37 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         top_layout.addStretch(1)
 
+        right_box = QtWidgets.QWidget()
+        right_layout = QtWidgets.QVBoxLayout(right_box)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+
+        self.settings_btn = QtWidgets.QPushButton("⚙")
+        self.settings_btn.setObjectName("settingsButton")
+        self.settings_btn.setFixedSize(32, 32)
+        self.settings_btn.setToolTip("Настройки")
+        self.settings_btn.clicked.connect(self._show_settings_overlay)
+        right_layout.addWidget(self.settings_btn, 0, QtCore.Qt.AlignRight | QtCore.Qt.AlignTop)
+
+        buttons_row = QtWidgets.QWidget()
+        buttons_layout = QtWidgets.QHBoxLayout(buttons_row)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(8)
+
         self.accounts_btn = QtWidgets.QPushButton("Аккаунты")
         self.accounts_btn.setObjectName("ghostButton")
         self.accounts_btn.clicked.connect(self._show_accounts_menu)
-        top_layout.addWidget(self.accounts_btn)
+        buttons_layout.addWidget(self.accounts_btn, 0, QtCore.Qt.AlignRight)
 
         self.disconnect_btn = QtWidgets.QPushButton("Выйти")
         self.disconnect_btn.setObjectName("dangerButton")
         self.disconnect_btn.clicked.connect(self.disconnect)
-        top_layout.addWidget(self.disconnect_btn)
+        buttons_layout.addWidget(self.disconnect_btn, 0, QtCore.Qt.AlignRight)
 
-        layout.addWidget(top_bar)
+        right_layout.addWidget(buttons_row, 0, QtCore.Qt.AlignRight | QtCore.Qt.AlignBottom)
+        top_layout.addWidget(right_box)
+
+        content_layout.addWidget(top_bar)
 
         # Center area (messages + users)
         center = QtWidgets.QWidget()
@@ -1048,7 +1100,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         self.scroll_area.setWidget(self.messages_widget)
         center_layout.addWidget(self.scroll_area, 1)
-        layout.addWidget(center, 1)
+        content_layout.addWidget(center, 1)
 
         # Bottom
         bottom = QtWidgets.QWidget()
@@ -1117,7 +1169,18 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         bottom_layout.addWidget(self.reply_bar)
         bottom_layout.addWidget(input_row)
-        layout.addWidget(bottom)
+        content_layout.addWidget(bottom)
+
+        layout.addWidget(self.chat_content, 1)
+
+        self.settings_overlay = OverlayController(self.chat_page, self.chat_content)
+        self.profile_overlay = OverlayController(
+            self.chat_page,
+            self.chat_content,
+            modal_size=QtCore.QSize(430, 600)
+        )
+        self._build_settings_overlay()
+        self._init_notifications()
 
     def _labeled(self, text, widget):
         wrapper = QtWidgets.QWidget()
@@ -1130,6 +1193,97 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         layout.addWidget(label)
         layout.addWidget(widget, 1)
         return wrapper
+
+    def _build_settings_overlay(self):
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(10, 6, 10, 10)
+        layout.setSpacing(12)
+
+        title = QtWidgets.QLabel("Настройки")
+        title_font = QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        self.settings_notifications_checkbox = QtWidgets.QCheckBox("Использовать уведомления Windows?")
+        self.settings_notifications_checkbox.setChecked(bool(self.use_windows_notifications))
+        self.settings_notifications_checkbox.toggled.connect(self._set_windows_notifications)
+        layout.addWidget(self.settings_notifications_checkbox)
+
+        note = QtWidgets.QLabel(
+            "Уведомления показываются при новом сообщении в личных сообщениях, когда окно свернуто. "
+            "Если Windows не показывает уведомления, выключите переключатель, чтобы использовать встроенные."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("mutedLabel")
+        layout.addWidget(note)
+        layout.addStretch(1)
+
+        if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+            self.use_windows_notifications = False
+            self._save_settings()
+            self.settings_notifications_checkbox.setChecked(False)
+            self.settings_notifications_checkbox.setEnabled(False)
+            self.settings_notifications_checkbox.setToolTip("Системные уведомления недоступны.")
+
+        self.settings_overlay.set_content(panel)
+
+    def _init_notifications(self):
+        self.popup_notifier = PopupNotifier(self)
+        if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+            self.notifier = None
+            return
+        self.notifier = WindowsNotifier(self)
+        icon = self.windowIcon()
+        if icon is None or icon.isNull():
+            icon = self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon)
+        self.notifier.set_icon(icon)
+        self.notifier.set_tooltip("MAXutko Messenger")
+        self.notifier.message_clicked.connect(self._on_notification_clicked)
+        self.popup_notifier.message_clicked.connect(self._on_notification_clicked)
+        if self.use_windows_notifications:
+            self.notifier.show()
+
+    def _set_windows_notifications(self, enabled):
+        self.use_windows_notifications = bool(enabled)
+        self._save_settings()
+        if self.notifier:
+            if self.use_windows_notifications:
+                self.notifier.show()
+            else:
+                self.notifier.hide()
+
+    def _is_window_minimized(self):
+        return bool(self.windowState() & QtCore.Qt.WindowMinimized)
+
+    def _notify_dm(self, data):
+        if not self._is_window_minimized():
+            return
+        if data.get("type") not in ("dm", "file"):
+            return
+        if data.get("to") != self.username:
+            return
+        sender = data.get("username")
+        if not sender or sender == self.username:
+            return
+        count = self.unread_counts.get(sender, 0)
+        if count <= 0:
+            count = 1
+        title = self._display_name(sender) or sender
+        body = f"Новые сообщения ({count})"
+        if self.use_windows_notifications and self.notifier:
+            self.notifier.notify(title, body, payload={"sender": sender})
+        elif self.popup_notifier:
+            self.popup_notifier.notify(title, body, payload={"sender": sender})
+
+    def _on_notification_clicked(self, payload):
+        sender = (payload or {}).get("sender")
+        if not sender:
+            return
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        self.set_chat_mode("dm", sender)
 
     def show_login_screen(self, status_text=""):
         self.status_label.setText(status_text)
@@ -1188,6 +1342,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             except Exception:
                 pass
         self.profile_dialogs = {}
+        if getattr(self, "settings_overlay", None):
+            self.settings_overlay.hide()
+        if getattr(self, "profile_overlay", None):
+            self.profile_overlay.hide()
 
     def show_reset_step1_screen(self):
         self.reset_status_label.setText("")
@@ -1226,6 +1384,61 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 json.dump(self.avatar_cache, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
+
+    def _load_download_cache(self):
+        try:
+            if os.path.exists(self.download_cache_path):
+                with open(self.download_cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+        return {}
+
+    def _save_download_cache(self):
+        try:
+            with open(self.download_cache_path, "w", encoding="utf-8") as f:
+                json.dump(self.download_cache, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _download_cache_key(self, username=None):
+        username = (username or self.username or "").strip()
+        if not username:
+            return ""
+        return f"{username}@{self.host}:{int(self.port)}"
+
+    def _load_downloaded_files_for_account(self, username=None):
+        key = self._download_cache_key(username)
+        if not key:
+            self.downloaded_files = {}
+            return
+        bucket = self.download_cache.get(key, {})
+        if not isinstance(bucket, dict):
+            bucket = {}
+        cleaned = {}
+        for file_id, path in bucket.items():
+            if not file_id or not isinstance(path, str):
+                continue
+            if os.path.exists(path):
+                cleaned[file_id] = path
+        self.downloaded_files = cleaned
+        if cleaned != bucket:
+            self.download_cache[key] = cleaned
+            self._save_download_cache()
+
+    def _remember_downloaded_file(self, file_id, path):
+        file_id = (file_id or "").strip()
+        if not file_id or not path:
+            return
+        key = self._download_cache_key()
+        if not key:
+            return
+        self.downloaded_files[file_id] = path
+        bucket = self.download_cache.setdefault(key, {})
+        bucket[file_id] = path
+        self._save_download_cache()
 
     def _load_saved_tokens(self):
         try:
@@ -1282,6 +1495,28 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if data is None:
                 data = self.auth_tokens
             with open(self.auth_tokens_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _load_settings(self):
+        if not os.path.exists(self.settings_path):
+            return {"windows_notifications": True}
+        try:
+            with open(self.settings_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {"windows_notifications": True}
+
+    def _save_settings(self):
+        data = {
+            "windows_notifications": bool(self.use_windows_notifications)
+        }
+        try:
+            with open(self.settings_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
@@ -1395,6 +1630,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if new_token:
                 self._remember_account(self.username, new_token, set_active=True)
 
+            self._load_downloaded_files_for_account(self.username)
             self.client_socket = sock
             self.prebuffer = rest
             self.running = True
@@ -1516,6 +1752,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         pos = self.accounts_btn.mapToGlobal(QtCore.QPoint(0, self.accounts_btn.height()))
         menu.exec_(pos)
+
+    def _show_profile_overlay(self, dialog):
+        if not getattr(self, "profile_overlay", None):
+            return
+        self.profile_overlay.set_content(dialog)
+        self.profile_overlay.show()
 
     def _add_account_flow(self):
         self._disconnect_internal(show_login=False)
@@ -1668,6 +1910,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if resp_username:
                 self.username = resp_username
 
+            self._load_downloaded_files_for_account(self.username)
             self.client_socket = sock
             self.prebuffer = rest_or_status
             self.running = True
@@ -2058,6 +2301,15 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return f"{int(size)} {units[idx]}"
         return f"{size:.1f} {units[idx]}"
 
+    def _format_timestamp_hm(self, value):
+        if not value:
+            return ""
+        text = str(value).strip()
+        parts = text.split(":")
+        if len(parts) >= 2:
+            return f"{parts[0]}:{parts[1]}"
+        return text
+
     def _make_download_path(self, filename):
         safe_name = filename or "file"
         base_dir = self.downloads_dir
@@ -2237,8 +2489,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             dialog.close()
         path = state.get("path")
         if path:
-            self.downloaded_files[file_id] = path
+            self._remember_downloaded_file(file_id, path)
             self._update_file_buttons_open(file_id, path)
+            self._open_downloaded_file(path)
 
     def _fail_download(self, file_id, message):
         with self.download_states_lock:
@@ -2445,13 +2698,20 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self._fail_download((data.get("file_id") or "").strip(), data.get("message", "Ошибка загрузки"))
             return
         self._store_message(data)
+        is_dm_item = data.get("type") in ("dm", "file") and data.get("to")
+        notified = False
+        if is_dm_item and self._is_window_minimized():
+            self._maybe_increment_unread(data)
+            self._notify_dm(data)
+            notified = True
         if self._should_render(data):
             self._render_message(data)
             if data.get("type") == "dm":
                 self._maybe_send_read_receipt(data)
         else:
-            if data.get("type") == "dm":
+            if is_dm_item and not notified:
                 self._maybe_increment_unread(data)
+                self._notify_dm(data)
         return
 
     def _render_message(self, data):
@@ -2461,79 +2721,95 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         time = data.get("timestamp", "")
         tp = data.get("type", "message")
 
+        is_dm = False
         msg_widget = QtWidgets.QFrame()
         msg_layout = QtWidgets.QVBoxLayout(msg_widget)
         msg_layout.setContentsMargins(10, 8, 10, 8)
-        msg_layout.setSpacing(4)
+        msg_layout.setSpacing(6)
 
         if tp == "system":
             msg_widget.setObjectName("messageSystem")
             label = QtWidgets.QLabel(text)
             label.setAlignment(QtCore.Qt.AlignCenter)
             label.setWordWrap(True)
+            label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
             msg_layout.addWidget(label)
             alignment = QtCore.Qt.AlignHCenter
             msg_type = "system"
         else:
             is_me = user == self.username
-            msg_widget.setObjectName("messageMe" if is_me else "messageOther")
+            msg_widget.setObjectName("messageBubbleMe" if is_me else "messageBubbleOther")
+            is_dm = tp == "dm" or (tp == "file" and data.get("to"))
+            time_text = self._format_timestamp_hm(time)
+            display_name = self._display_name(user)
+            show_author = self.chat_mode == "group"
             reply_info = self._reply_preview_info(data)
             if reply_info:
                 reply_frame = QtWidgets.QFrame()
-                reply_frame.setObjectName("replyPreview")
+                reply_frame.setObjectName("messageReply")
                 reply_layout = QtWidgets.QVBoxLayout(reply_frame)
-                reply_layout.setContentsMargins(8, 6, 8, 6)
+                reply_layout.setContentsMargins(10, 6, 10, 6)
                 reply_layout.setSpacing(2)
 
                 reply_title = QtWidgets.QLabel(reply_info["title"])
-                reply_title.setObjectName("replyMeta")
+                reply_title.setObjectName("messageReplyMeta")
+                reply_title.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
                 reply_body = QtWidgets.QLabel(reply_info["body"])
-                reply_body.setObjectName("replyBody")
+                reply_body.setObjectName("messageReplyBody")
                 reply_body.setWordWrap(True)
+                reply_body.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
 
                 reply_layout.addWidget(reply_title)
                 reply_layout.addWidget(reply_body)
                 msg_layout.addWidget(reply_frame)
 
-            is_dm = tp == "dm" or (tp == "file" and data.get("to"))
-            if is_dm:
-                if is_me:
-                    target_name = self._display_name(data.get("to", ""))
-                    name = f"You -> {target_name}".strip()
-                else:
-                    sender_name = self._display_name(user)
-                    name = f"{sender_name} -> You"
-            else:
-                name = "You" if is_me else self._display_name(user)
-            meta_text = f"{name} • {time}".strip()
-            if is_dm and is_me and ("delivered" in data or "read" in data):
-                status = self._dm_status_text(data)
-                if status:
-                    meta_text = f"{meta_text} • {status}".strip()
-            meta = QtWidgets.QLabel(meta_text)
-            meta.setObjectName("mutedLabel")
-            msg_layout.addWidget(meta)
+            if show_author:
+                header = QtWidgets.QWidget()
+                header.setObjectName("messageHeader")
+                header_layout = QtWidgets.QHBoxLayout(header)
+                header_layout.setContentsMargins(0, 0, 0, 0)
+                header_layout.setSpacing(6)
+                author = QtWidgets.QLabel("Вы" if is_me else display_name)
+                author.setObjectName("messageAuthor")
+                header_layout.addWidget(author, 0, QtCore.Qt.AlignLeft)
+                header_layout.addStretch(1)
+                time_label = QtWidgets.QLabel(time_text)
+                time_label.setObjectName("messageTime")
+                header_layout.addWidget(time_label, 0, QtCore.Qt.AlignRight)
+                msg_layout.addWidget(header)
             if tp == "file":
                 file_name = data.get("filename") or "file"
                 size_val = data.get("size")
                 size_text = self._format_bytes(size_val) if size_val is not None else ""
-                file_label = QtWidgets.QLabel(f"{file_name} {f'({size_text})' if size_text else ''}".strip())
+                file_card = QtWidgets.QFrame()
+                file_card.setObjectName("fileCard")
+                file_card_layout = QtWidgets.QVBoxLayout(file_card)
+                file_card_layout.setContentsMargins(10, 8, 10, 8)
+                file_card_layout.setSpacing(4)
+                file_label = QtWidgets.QLabel(file_name)
+                file_label.setObjectName("fileName")
                 file_label.setWordWrap(True)
-                download_btn = QtWidgets.QPushButton("Скачать")
-                download_btn.setObjectName("ghostButton")
+                file_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+                file_size = QtWidgets.QLabel(size_text)
+                file_size.setObjectName("fileSize")
+                file_size.setVisible(bool(size_text))
+                file_size.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+                file_card_layout.addWidget(file_label)
+                file_card_layout.addWidget(file_size)
                 file_id = data.get("file_id")
-                download_btn.setEnabled(bool(file_id))
-                download_btn.clicked.connect(
-                    lambda _=None, fid=file_id, fn=file_name, sz=size_val: self._start_file_download(fid, fn, sz)
-                )
+                download_btn = QtWidgets.QPushButton()
+                download_btn.setObjectName("fileButton")
+                self._register_file_button(file_id, download_btn, file_name, size_val)
                 file_row = QtWidgets.QHBoxLayout()
-                file_row.setSpacing(6)
-                file_row.addWidget(file_label, 1)
-                file_row.addWidget(download_btn, 0, QtCore.Qt.AlignRight)
+                file_row.setSpacing(8)
+                file_row.addWidget(file_card, 1)
+                file_row.addWidget(download_btn, 0, QtCore.Qt.AlignRight | QtCore.Qt.AlignTop)
                 msg_layout.addLayout(file_row)
             else:
                 body = QtWidgets.QLabel(text)
                 body.setWordWrap(True)
+                body.setObjectName("messageBody")
+                body.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
                 msg_layout.addWidget(body)
             alignment = QtCore.Qt.AlignRight if is_me else QtCore.Qt.AlignLeft
             msg_type = "chat"
@@ -2548,19 +2824,58 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         msg_widget.setMinimumWidth(min_w)
         msg_widget.setMaximumWidth(max_w)
 
+        wrapper = QtWidgets.QWidget()
+        wrapper_layout = QtWidgets.QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.setSpacing(4)
+        wrapper_layout.addWidget(msg_widget)
+        if tp != "system" and is_dm:
+            meta = QtWidgets.QWidget()
+            meta.setObjectName("messageMeta")
+            meta_layout = QtWidgets.QHBoxLayout(meta)
+            meta_layout.setContentsMargins(2, 0, 2, 0)
+            meta_layout.setSpacing(4)
+            meta_time = QtWidgets.QLabel(time_text)
+            meta_time.setObjectName("messageMetaTime")
+            meta_layout.addWidget(meta_time)
+            if is_me and ("delivered" in data or "read" in data):
+                status = self._dm_status_text(data)
+                if status:
+                    meta_status = QtWidgets.QLabel(status)
+                    meta_status.setObjectName("messageMetaStatus")
+                    meta_layout.addWidget(meta_status)
+            if is_me:
+                meta_layout.insertStretch(0, 1)
+            else:
+                meta_layout.addStretch(1)
+            wrapper_layout.addWidget(meta)
+
         row = QtWidgets.QWidget()
+        row.setObjectName("messageRow")
         row_layout = QtWidgets.QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(0)
+        row_layout.setSpacing(8)
         if alignment == QtCore.Qt.AlignRight:
             row_layout.addStretch(1)
-            row_layout.addWidget(msg_widget)
+            row_layout.addWidget(wrapper)
         elif alignment == QtCore.Qt.AlignLeft:
-            row_layout.addWidget(msg_widget)
+            avatar = AvatarLabel(row)
+            avatar.setObjectName("messageAvatar")
+            initials = (self._display_name(user)[:1] or "?").upper()
+            avatar.setText(initials)
+            avatar.setFixedSize(30, 30)
+            avatar_font = avatar.font()
+            avatar_font.setBold(True)
+            avatar_font.setPixelSize(11)
+            avatar.setFont(avatar_font)
+            avatar.setAlignment(QtCore.Qt.AlignCenter)
+            avatar.set_avatar_data(self._avatar_data(user))
+            row_layout.addWidget(avatar, 0, QtCore.Qt.AlignTop)
+            row_layout.addWidget(wrapper)
             row_layout.addStretch(1)
         else:
             row_layout.addStretch(1)
-            row_layout.addWidget(msg_widget)
+            row_layout.addWidget(wrapper)
             row_layout.addStretch(1)
 
         self.messages_layout.insertWidget(self.messages_layout.count() - 1, row)
@@ -2684,14 +2999,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return
         existing = self.profile_dialogs.get(username)
         if existing:
-            existing.raise_()
-            existing.activateWindow()
+            self._show_profile_overlay(existing)
             return
 
         is_self = username == self.username
-        dialog = ProfileDialog(self, self.username, username, is_self, self._is_admin(), self.clans)
+        dialog = ProfileDialog(self, self.username, username, is_self, self._is_admin(), self.clans, embedded=True)
         self.profile_dialogs[username] = dialog
-        dialog.finished.connect(lambda _=None, u=username: self.profile_dialogs.pop(u, None))
 
         dialog.nick_input.textChanged.connect(dialog._update_title)
         if dialog.change_avatar_btn:
@@ -2711,18 +3024,16 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self._request_profile(username)
         self._request_note(username)
 
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        self._show_profile_overlay(dialog)
 
     def _dm_status_text(self, data):
         delivered = bool(data.get("delivered", False))
         read = bool(data.get("read", False))
         if read:
-            return "✓✓ прочитано"
+            return "✓✓"
         if delivered:
-            return "✓✓ доставлено"
-        return "✓ отправлено"
+            return "✓"
+        return ""
 
     def _apply_receipt(self, data):
         msg_id = data.get("id")
@@ -2767,7 +3078,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         sender = data.get("username")
         if not sender or sender == self.username:
             return
-        if self.chat_mode == "dm" and self.dm_target == sender:
+        if self.chat_mode == "dm" and self.dm_target == sender and not self._is_window_minimized():
             return
         if data.get("read"):
             return
@@ -2796,6 +3107,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             pass
 
     def _maybe_send_read_receipt(self, data):
+        if self._is_window_minimized():
+            return
         if self.chat_mode != "dm" or self.dm_target != data.get("username"):
             return
         if data.get("type") not in ("dm", "file"):
@@ -2811,6 +3124,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self._send_read_receipt(msg_id)
 
     def _send_read_receipts_for_current(self):
+        if self._is_window_minimized():
+            return
         if self.chat_mode != "dm" or not self.dm_target:
             return
         items = self.conversations.get(f"dm:{self.dm_target}", [])
@@ -3068,11 +3383,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if viewport <= 0:
             viewport = 720
         if msg_type == "system":
-            max_w = int(viewport * 0.6)
+            max_w = int(viewport * 0.55)
             min_w = min(260, max_w)
         else:
-            max_w = int(viewport * 0.55)
-            min_w = min(max(220, int(viewport * 0.32)), max_w)
+            max_w = int(viewport * 0.62)
+            min_w = min(max(240, int(viewport * 0.34)), max_w)
         return min_w, max_w
 
     def _update_message_widths(self):
@@ -3081,6 +3396,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if not row:
                 continue
             for child in row.findChildren(QtWidgets.QFrame):
+                if child.objectName() not in ("messageSystem", "messageBubbleMe", "messageBubbleOther"):
+                    continue
                 msg_type = "system" if child.objectName() == "messageSystem" else "chat"
                 min_w, max_w = self._message_widths(msg_type)
                 child.setMinimumWidth(min_w)
@@ -3141,6 +3458,26 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_message_widths()
+        if getattr(self, "settings_overlay", None):
+            self.settings_overlay.resize(self.chat_page.rect())
+
+    def _show_settings_overlay(self):
+        if getattr(self, "settings_overlay", None):
+            self.settings_overlay.show()
+
+    def _hide_settings_overlay(self):
+        if getattr(self, "settings_overlay", None):
+            self.settings_overlay.hide()
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Escape:
+            if getattr(self, "profile_overlay", None) and self.profile_overlay.is_visible():
+                self.profile_overlay.hide()
+                return
+            if getattr(self, "settings_overlay", None) and self.settings_overlay.is_visible():
+                self.settings_overlay.hide()
+                return
+        super().keyPressEvent(event)
 
 
 def main():

@@ -68,6 +68,42 @@ QMainWindow, QStackedWidget {
     font-weight: 600;
 }
 
+#overlay {
+    background: rgba(0, 0, 0, 80);
+}
+
+#settingsModal {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+}
+
+#settingsClose {
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #d1d5db;
+    border-radius: 14px;
+    padding: 0px;
+    font-size: 12pt;
+}
+
+#settingsClose:hover {
+    background: #f3f4f6;
+}
+
+#settingsButton {
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #d1d5db;
+    border-radius: 16px;
+    padding: 0px;
+    font-size: 12pt;
+}
+
+#settingsButton:hover {
+    background: #f3f4f6;
+}
+
 QLineEdit, QTextEdit {
     color: #111827;
     background: #ffffff;
@@ -218,34 +254,164 @@ QScrollArea {
     font-weight: 600;
 }
 
-#messageMe {
-    background: #2563eb;
-    border-radius: 14px;
-    padding: 8px 12px;
+#messageRow {
+    background: transparent;
 }
 
-#messageOther {
+#messageAvatar {
     background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 14px;
-    padding: 8px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 15px;
+    color: #94a3b8;
+}
+
+#messageBubbleMe {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #2563eb, stop:1 #1d4ed8);
+    border-radius: 16px;
+    padding: 10px 12px;
+}
+
+#messageBubbleOther {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 10px 12px;
 }
 
 #messageSystem {
-    background: #e5e7eb;
-    border-radius: 12px;
-    padding: 6px 10px;
+    background: #e2e8f0;
+    border-radius: 18px;
+    padding: 6px 14px;
 }
 
-#messageMe QLabel,
-#messageOther QLabel,
-#messageSystem QLabel {
+#messageHeader {
     background: transparent;
-    color: #111827;
 }
 
-#messageMe QLabel {
-    color: #ffffff;
+#messageAuthor {
+    color: #334155;
+    font-weight: 600;
+    font-size: 9.5pt;
+}
+
+#messageTime {
+    color: #94a3b8;
+    font-size: 8.5pt;
+}
+
+#messageStatus {
+    color: #dbeafe;
+    font-size: 8.5pt;
+    font-weight: 600;
+}
+
+#messageMeta {
+    background: transparent;
+}
+
+#messageMetaTime {
+    color: #94a3b8;
+    font-size: 8pt;
+}
+
+#messageMetaStatus {
+    color: #94a3b8;
+    font-size: 8pt;
+    font-weight: 600;
+}
+
+#messageBody {
+    color: #0f172a;
+    font-size: 10pt;
+}
+
+#messageReply {
+    background: #f1f5f9;
+    border-left: 3px solid #94a3b8;
+    border-radius: 12px;
+}
+
+#messageReplyMeta {
+    color: #64748b;
+    font-size: 8.5pt;
+    font-weight: 600;
+}
+
+#messageReplyBody {
+    color: #334155;
+    font-size: 9pt;
+}
+
+#fileCard {
+    background: #f8fafc;
+    border: 1px dashed #cbd5f5;
+    border-radius: 12px;
+}
+
+#fileName {
+    color: #0f172a;
+    font-weight: 600;
+}
+
+#fileSize {
+    color: #64748b;
+    font-size: 8.5pt;
+}
+
+#fileButton {
+    background: #ffffff;
+    color: #1d4ed8;
+    border: 1px solid #cbd5f5;
+    border-radius: 10px;
+    padding: 4px 10px;
+    min-height: 28px;
+}
+
+#fileButton:hover {
+    background: #eff6ff;
+}
+
+#messageBubbleMe QLabel {
+    background: transparent;
+    color: #f8fafc;
+}
+
+#messageBubbleMe #messageAuthor,
+#messageBubbleMe #messageTime {
+    color: #dbeafe;
+}
+
+#messageBubbleMe #messageReply {
+    background: #1e3a8a;
+    border-left: 3px solid #93c5fd;
+}
+
+#messageBubbleMe #messageReplyMeta,
+#messageBubbleMe #messageReplyBody,
+#messageBubbleMe #fileName,
+#messageBubbleMe #fileSize {
+    color: #e0e7ff;
+}
+
+#messageBubbleMe #messageMetaTime,
+#messageBubbleMe #messageMetaStatus {
+    color: #c7d2fe;
+}
+
+#messageBubbleMe #fileCard {
+    background: #1e3a8a;
+    border: 1px dashed #93c5fd;
+}
+
+#messageBubbleMe #fileButton {
+    background: #1e3a8a;
+    color: #dbeafe;
+    border: 1px solid #93c5fd;
+}
+
+#messageBubbleMe #fileButton:hover {
+    background: #1e40af;
 }
 
 #replyBar {
@@ -263,25 +429,6 @@ QScrollArea {
 #replyBody {
     color: #6b7280;
     font-size: 9pt;
-}
-
-#replyPreview {
-    background: #eef2ff;
-    border-left: 3px solid #2563eb;
-    border-radius: 10px;
-}
-
-#replyPreview QLabel {
-    background: transparent;
-}
-
-#messageMe #replyPreview {
-    background: #1e3a8a;
-    border-left: 3px solid #93c5fd;
-}
-
-#messageMe #replyPreview QLabel {
-    color: #e0e7ff;
 }
 
 #statusLabel {

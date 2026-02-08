@@ -13,21 +13,7 @@
       "host": "127.0.0.1",
       "port": 5555,
       "last_used": 1770560065
-    },
-    {
-      "username": "iwantriker",
-      "token": "60a1012de2dc819a823c871c98cfc1634ce05b0df9b2ddde",
-      "host": "26.202.145.247",
-      "port": 5555,
-      "last_used": 1770569478
-    },
-    {
-      "username": "test",
-      "token": "c3471f54ef2770a73645247bc924b45543e069042ea1be3f",
-      "host": "26.202.145.247",
-      "port": 5555,
-      "last_used": 1770569879
     }
   ],
-  "active": "test"
+  "active": ""
 }
