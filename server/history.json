@@ -1636,5 +1636,77 @@
     "message": "iwantriker left the chat",
     "timestamp": "",
     "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "iwantriker",
+    "message": "тп",
+    "timestamp": "20:08:47",
+    "type": "message"
+  },
+  {
+    "username": "iwantriker",
+    "message": "тап",
+    "timestamp": "20:08:47",
+    "type": "message"
+  },
+  {
+    "username": "iwantriker",
+    "message": "т",
+    "timestamp": "20:08:47",
+    "type": "message"
+  },
+  {
+    "username": "iwantriker",
+    "message": "ап",
+    "timestamp": "20:08:47",
+    "type": "message"
+  },
+  {
+    "username": "iwantriker",
+    "message": "тап",
+    "timestamp": "20:08:48",
+    "type": "message"
+  },
+  {
+    "username": "iwantriker",
+    "message": "т",
+    "timestamp": "20:08:48",
+    "type": "message"
+  },
+  {
+    "username": "iwantriker",
+    "message": "пат",
+    "timestamp": "20:08:48",
+    "type": "message"
+  },
+  {
+    "username": "iwantriker",
+    "message": "пат",
+    "timestamp": "20:08:48",
+    "type": "message"
+  },
+  {
+    "username": "iwantriker",
+    "message": "ьп",
+    "timestamp": "20:08:57",
+    "type": "message"
+  },
+  {
+    "username": "iwantriker",
+    "message": "ь",
+    "timestamp": "20:08:57",
+    "type": "message"
+  },
+  {
+    "username": "iwantriker",
+    "message": "ьор",
+    "timestamp": "20:08:57",
+    "type": "message"
   }
 ]
