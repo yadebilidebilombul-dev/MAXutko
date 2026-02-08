@@ -4,7 +4,7 @@ import ssl
 import secrets
 from email.message import EmailMessage
 
-SwitchMail = False
+SwitchMail = True
 
 
 def _coerce_bool(value, default):

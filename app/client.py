@@ -1,8 +1,11 @@
 ﻿import sys
+import os
 import socket
 import threading
 import json
 import re
+import base64
+import io
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 SERVER_HOST = "127.0.0.1"
@@ -52,6 +55,188 @@ class MessageInput(QtWidgets.QTextEdit):
         super().keyPressEvent(event)
 
 
+class AvatarLabel(QtWidgets.QLabel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pixmap = None
+
+    def set_avatar_data(self, data_url):
+        self._pixmap = None
+        if not data_url or not isinstance(data_url, str):
+            self.update()
+            return
+        if not data_url.startswith("data:image/"):
+            self.update()
+            return
+        try:
+            header, b64 = data_url.split(",", 1)
+            raw = base64.b64decode(b64)
+            pix = QtGui.QPixmap()
+            pix.loadFromData(raw)
+            if not pix.isNull():
+                self._pixmap = pix
+        except Exception:
+            self._pixmap = None
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        rect.translate(0, 1)
+
+        border = QtGui.QPen(QtGui.QColor("#e5e7eb"))
+        border.setWidth(1)
+        painter.setPen(border)
+        painter.setBrush(QtCore.Qt.NoBrush)
+        painter.drawEllipse(rect)
+
+        if self._pixmap:
+            clip_path = QtGui.QPainterPath()
+            clip_path.addEllipse(QtCore.QRectF(rect))
+            painter.setClipPath(clip_path)
+            scaled = self._pixmap.scaled(
+                rect.size(),
+                QtCore.Qt.KeepAspectRatioByExpanding,
+                QtCore.Qt.SmoothTransformation
+            )
+            painter.drawPixmap(rect, scaled, scaled.rect())
+        else:
+            painter.setPen(QtGui.QColor("#9ca3af"))
+            painter.setFont(self.font())
+            painter.drawText(rect, QtCore.Qt.AlignCenter, self.text())
+
+
+class ProfileDialog(QtWidgets.QDialog):
+    def __init__(self, parent, owner_username, target_username, is_self):
+        super().__init__(parent)
+        self.owner_username = owner_username
+        self.target_username = target_username
+        self.is_self = is_self
+        self.avatar_data = ""
+
+        self.setWindowTitle("Профиль пользователя")
+        self.setModal(True)
+        self.setMinimumWidth(360)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        header = QtWidgets.QHBoxLayout()
+        header.setSpacing(10)
+
+        self.avatar_label = AvatarLabel(self)
+        self.avatar_label.setFixedSize(72, 72)
+        font = self.avatar_label.font()
+        font.setBold(True)
+        font.setPixelSize(18)
+        self.avatar_label.setFont(font)
+        self.avatar_label.setAlignment(QtCore.Qt.AlignCenter)
+        header.addWidget(self.avatar_label)
+
+        title_box = QtWidgets.QVBoxLayout()
+        self.title_label = QtWidgets.QLabel("")
+        title_font = QtGui.QFont("Segoe UI", 14, QtGui.QFont.Bold)
+        self.title_label.setFont(title_font)
+        title_box.addWidget(self.title_label)
+
+        self.username_label = QtWidgets.QLabel(f"@{self.target_username}")
+        self.username_label.setObjectName("mutedLabel")
+        title_box.addWidget(self.username_label)
+        title_box.addStretch(1)
+
+        header.addLayout(title_box, 1)
+
+        if self.is_self:
+            self.change_avatar_btn = QtWidgets.QPushButton("Сменить аватар")
+            self.change_avatar_btn.setObjectName("ghostButton")
+            header.addWidget(self.change_avatar_btn, 0, QtCore.Qt.AlignTop)
+        else:
+            self.change_avatar_btn = None
+
+        layout.addLayout(header)
+
+        nick_label = QtWidgets.QLabel("Никнейм")
+        nick_label.setObjectName("mutedLabel")
+        layout.addWidget(nick_label)
+        self.nick_input = QtWidgets.QLineEdit()
+        self.nick_input.setPlaceholderText("Никнейм")
+        self.nick_input.setReadOnly(not self.is_self)
+        layout.addWidget(self.nick_input)
+
+        about_label = QtWidgets.QLabel("О себе")
+        about_label.setObjectName("mutedLabel")
+        layout.addWidget(about_label)
+        self.about_input = QtWidgets.QTextEdit()
+        self.about_input.setPlaceholderText("Расскажите о себе")
+        self.about_input.setFixedHeight(90)
+        self.about_input.setReadOnly(not self.is_self)
+        layout.addWidget(self.about_input)
+
+        note_label = QtWidgets.QLabel("Заметка (только для вас)")
+        note_label.setObjectName("mutedLabel")
+        layout.addWidget(note_label)
+        self.note_input = QtWidgets.QTextEdit()
+        self.note_input.setPlaceholderText("Личная заметка")
+        self.note_input.setFixedHeight(90)
+        layout.addWidget(self.note_input)
+
+        actions = QtWidgets.QHBoxLayout()
+        actions.addStretch(1)
+
+        self.save_note_btn = QtWidgets.QPushButton("Сохранить заметку")
+        self.save_note_btn.setObjectName("ghostButton")
+        actions.addWidget(self.save_note_btn)
+
+        if self.is_self:
+            self.save_profile_btn = QtWidgets.QPushButton("Сохранить профиль")
+            self.save_profile_btn.setObjectName("primaryButton")
+            actions.addWidget(self.save_profile_btn)
+        else:
+            self.save_profile_btn = None
+
+        self.close_btn = QtWidgets.QPushButton("Закрыть")
+        self.close_btn.setObjectName("primaryButton")
+        self.close_btn.clicked.connect(self.accept)
+        actions.addWidget(self.close_btn)
+
+        layout.addLayout(actions)
+
+    def set_profile(self, profile):
+        nick = (profile.get("nick") or "").strip()
+        about = profile.get("about") or ""
+        avatar = profile.get("avatar") or ""
+        self.nick_input.setText(nick)
+        self.about_input.setPlainText(about)
+        self.set_avatar_data(avatar)
+        self._update_title()
+
+    def set_note(self, note):
+        self.note_input.setPlainText(note or "")
+
+    def _update_title(self):
+        nick = (self.nick_input.text() or "").strip()
+        display = nick if nick else self.target_username
+        self.title_label.setText(display)
+        initials = display[:1].upper() if display else "?"
+        self.avatar_label.setText(initials)
+
+    def set_avatar_data(self, data_url):
+        self.avatar_data = data_url or ""
+        self.avatar_label.set_avatar_data(self.avatar_data)
+
+    def collect_profile_data(self):
+        return {
+            "nick": (self.nick_input.text() or "").strip(),
+            "about": self.about_input.toPlainText().strip(),
+            "avatar": self.avatar_data
+        }
+
+    def collect_note(self):
+        return self.note_input.toPlainText().strip()
+
+
 class MAXutkoClient(QtWidgets.QMainWindow):
 
     def __init__(self):
@@ -80,6 +265,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.message_index = {}
         self.unread_counts = {}
         self.latest_users = []
+        self.user_directory = {}
+        self.profile_dialogs = {}
 
         self.setup_ui()
         self.show_login_screen()
@@ -107,12 +294,22 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self._load_qss()
 
     def _load_qss(self):
-        qss_path = QtCore.QFileInfo(__file__).absolutePath() + "/ui.qss"
-        try:
-            with open(qss_path, "r", encoding="utf-8") as f:
-                QtWidgets.QApplication.instance().setStyleSheet(f.read())
-        except Exception:
-            pass
+        base_dir = QtCore.QFileInfo(__file__).absolutePath()
+        candidates = [
+            os.path.join(base_dir, "ui.qss"),
+            os.path.join(os.getcwd(), "ui.qss"),
+            os.path.join(os.getcwd(), "app", "ui.qss"),
+        ]
+        for qss_path in candidates:
+            if os.path.isfile(qss_path):
+                try:
+                    with open(qss_path, "r", encoding="utf-8") as f:
+                        QtWidgets.QApplication.instance().setStyleSheet(f.read())
+                    return
+                except Exception as e:
+                    print(f"Failed to load QSS: {qss_path} ({e})", file=sys.stderr)
+                    return
+        print("QSS not found. Tried: " + ", ".join(candidates), file=sys.stderr)
 
     def _build_login_page(self):
         root_layout = QtWidgets.QVBoxLayout(self.login_page)
@@ -124,7 +321,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         card_layout.setContentsMargins(24, 22, 24, 22)
         card_layout.setSpacing(12)
 
-        title = QtWidgets.QLabel("MAXutko Messenger")
+        title = QtWidgets.QLabel("MAXutko")
         title.setObjectName("titleLabel")
         title.setAlignment(QtCore.Qt.AlignCenter)
         title_font = QtGui.QFont("Segoe UI", 24, QtGui.QFont.Bold)
@@ -133,12 +330,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         # Username
         self.username_input = QtWidgets.QLineEdit()
-        self.username_input.setPlaceholderText("Enter username")
+        self.username_input.setPlaceholderText("Логин или никнейм")
         self.username_input.setObjectName("input")
 
         # Password
         self.password_input = QtWidgets.QLineEdit()
-        self.password_input.setPlaceholderText("Enter password")
+        self.password_input.setPlaceholderText("Пароль")
         self.password_input.setEchoMode(QtWidgets.QLineEdit.Password)
         self.password_input.setObjectName("input")
 
@@ -148,7 +345,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         email_layout.setContentsMargins(0, 0, 0, 0)
         email_layout.setSpacing(8)
         self.email_input = QtWidgets.QLineEdit()
-        self.email_input.setPlaceholderText("Enter email")
+        self.email_input.setPlaceholderText("Почта для подтверждения")
         self.email_input.setObjectName("input")
         email_layout.addWidget(self._labeled("Email:", self.email_input))
 
@@ -162,8 +359,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         mode_layout.setContentsMargins(0, 0, 0, 0)
         mode_layout.setSpacing(12)
 
-        self.login_radio = QtWidgets.QRadioButton("Login")
-        self.register_radio = QtWidgets.QRadioButton("Register")
+        self.login_radio = QtWidgets.QRadioButton("Вход")
+        self.register_radio = QtWidgets.QRadioButton("Регистрация")
         self.login_radio.setChecked(True)
         self.mode_group = QtWidgets.QButtonGroup()
         self.mode_group.addButton(self.login_radio)
@@ -176,7 +373,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         card_layout.addWidget(mode_row)
 
         # Button
-        self.connect_btn = QtWidgets.QPushButton("Login")
+        self.connect_btn = QtWidgets.QPushButton("Войти")
         self.connect_btn.setObjectName("primaryButton")
         self.connect_btn.clicked.connect(self.connect_to_server)
         card_layout.addWidget(self.connect_btn)
@@ -193,9 +390,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         code_layout.setContentsMargins(0, 0, 0, 0)
         code_layout.setSpacing(8)
         self.code_input = QtWidgets.QLineEdit()
-        self.code_input.setPlaceholderText("Verification code")
+        self.code_input.setPlaceholderText("Код из письма")
         self.code_input.setObjectName("input")
-        self.verify_btn = QtWidgets.QPushButton("Verify")
+        self.verify_btn = QtWidgets.QPushButton("Подтвердить")
         self.verify_btn.setObjectName("primaryButton")
         self.verify_btn.clicked.connect(self.verify_code)
         code_layout.addWidget(self._labeled("Code:", self.code_input))
@@ -226,7 +423,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.chat_label.setObjectName("mutedLabel")
         top_layout.addWidget(self.chat_label)
 
-        self.back_btn = QtWidgets.QPushButton("Back to chat")
+        self.back_btn = QtWidgets.QPushButton("Назад в общий чат")
         self.back_btn.setObjectName("ghostButton")
         self.back_btn.clicked.connect(self.back_to_group)
         self.back_btn.setVisible(False)
@@ -234,7 +431,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         top_layout.addStretch(1)
 
-        self.disconnect_btn = QtWidgets.QPushButton("Disconnect")
+        self.disconnect_btn = QtWidgets.QPushButton("Выйти")
         self.disconnect_btn.setObjectName("dangerButton")
         self.disconnect_btn.clicked.connect(self.disconnect)
         top_layout.addWidget(self.disconnect_btn)
@@ -250,20 +447,21 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         # Users panel
         self.users_panel = QtWidgets.QFrame()
         self.users_panel.setObjectName("usersPanel")
-        self.users_panel.setFixedWidth(200)
+        self.users_panel.setFixedWidth(240)
         users_layout = QtWidgets.QVBoxLayout(self.users_panel)
         users_layout.setContentsMargins(10, 10, 10, 10)
         users_layout.setSpacing(8)
 
-        users_title = QtWidgets.QLabel("Users")
+        users_title = QtWidgets.QLabel("Онлайн")
         users_title.setObjectName("usersTitle")
         users_layout.addWidget(users_title)
 
         self.users_list = QtWidgets.QListWidget()
         self.users_list.setObjectName("usersList")
-        self.users_list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.users_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.users_list.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.users_list.itemDoubleClicked.connect(self.open_direct_chat)
+        self.users_list.currentItemChanged.connect(self._sync_user_selection)
         self.users_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.users_list.customContextMenuRequested.connect(self.show_user_menu)
         users_layout.addWidget(self.users_list, 1)
@@ -294,9 +492,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         self.message_input = MessageInput()
         self.message_input.setObjectName("inputArea")
+        self.message_input.setPlaceholderText("Напишите сообщение…")
         self.message_input.send_requested.connect(self.send_message)
 
-        self.send_btn = QtWidgets.QPushButton("Send")
+        self.send_btn = QtWidgets.QPushButton("Отправить")
         self.send_btn.setObjectName("primaryButton")
         self.send_btn.clicked.connect(self.send_message)
 
@@ -328,18 +527,101 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.message_index = {}
         self.unread_counts = {}
         self.latest_users = []
+        self.user_directory = {}
+        for dlg in list(self.profile_dialogs.values()):
+            try:
+                dlg.close()
+            except Exception:
+                pass
+        self.profile_dialogs = {}
 
     def show_chat_screen(self):
-        self.user_label.setText(f"{self.username} @ {self.host}:{self.port}")
+        self._update_user_label()
         self.stack.setCurrentWidget(self.chat_page)
         self.set_chat_mode("group")
+
+    def _send_action(self, payload):
+        if not self.client_socket:
+            return
+        try:
+            self.client_socket.send((json.dumps(payload) + "\n").encode())
+        except Exception:
+            pass
+
+    def _display_name(self, username):
+        info = self.user_directory.get(username, {})
+        nick = (info.get("nick") or "").strip()
+        return nick if nick else username
+
+    def _avatar_data(self, username):
+        info = self.user_directory.get(username, {})
+        return info.get("avatar", "")
+
+    def _update_user_label(self):
+        if not self.username:
+            self.user_label.setText("")
+            return
+        display = self._display_name(self.username)
+        if display and display != self.username:
+            text = f"{display} (@{self.username}) @ {self.host}:{self.port}"
+        else:
+            text = f"{self.username} @ {self.host}:{self.port}"
+        self.user_label.setText(text)
+
+    def _pixmap_to_data_url(self, pixmap):
+        if pixmap is None or pixmap.isNull():
+            return ""
+        byte_array = QtCore.QByteArray()
+        buffer = QtCore.QBuffer(byte_array)
+        buffer.open(QtCore.QIODevice.WriteOnly)
+        pixmap.save(buffer, "PNG")
+        b64 = base64.b64encode(byte_array.data()).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+
+    def _request_profile(self, username):
+        self._send_action({"action": "get_profile", "username": username})
+
+    def _request_note(self, username):
+        self._send_action({"action": "get_note", "username": username})
+
+    def _save_profile(self, dialog):
+        data = dialog.collect_profile_data()
+        payload = {"action": "update_profile"}
+        payload.update(data)
+        self._send_action(payload)
+        self._request_profile(dialog.target_username)
+
+    def _save_note(self, dialog):
+        note = dialog.collect_note()
+        self._send_action({
+            "action": "set_note",
+            "username": dialog.target_username,
+            "note": note
+        })
+
+    def _choose_avatar(self, dialog):
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "???????? ??????",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif)"
+        )
+        if not file_path:
+            return
+        pixmap = QtGui.QPixmap(file_path)
+        if pixmap.isNull():
+            QtWidgets.QMessageBox.warning(self, "??????", "?? ??????? ????????? ???????????")
+            return
+        data_url = self._pixmap_to_data_url(pixmap)
+        dialog.set_avatar_data(data_url)
+        dialog._update_title()
 
     # ================= CONNECT =================
 
     def _sync_auth_mode(self):
         is_register = self.register_radio.isChecked()
         self.auth_mode = "register" if is_register else "login"
-        self.connect_btn.setText("Register" if is_register else "Login")
+        self.connect_btn.setText("Зарегистрироваться" if is_register else "Войти")
         self.email_row.setVisible(is_register)
         self.code_row.setVisible(False)
 
@@ -350,17 +632,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.status_label.setText("")
 
         if not self.username:
-            QtWidgets.QMessageBox.warning(self, "Error", "Enter username")
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите логин")
             return
         if not self.password:
-            QtWidgets.QMessageBox.warning(self, "Error", "Enter password")
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите пароль")
             return
         if self.auth_mode == "register" and not self.email:
-            QtWidgets.QMessageBox.warning(self, "Error", "Enter email")
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите почту")
             return
 
         if not re.match(r'^[A-Za-z0-9_]+$', self.username):
-            QtWidgets.QMessageBox.warning(self, "Error", "Only latin, numbers and _")
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Допустимы латиница, цифры и _")
             return
 
         try:
@@ -391,13 +673,13 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
             if resp.get("status") == "need_code":
                 self.pending_socket = self.client_socket
-                self.status_label.setText("Code sent to email")
+                self.status_label.setText("Код отправлен на почту")
                 self.code_row.setVisible(True)
                 self.connect_btn.setEnabled(False)
                 return
 
             if resp.get("status") != "ok":
-                msg = resp.get("message", "Auth failed")
+                msg = resp.get("message", "Не удалось войти")
                 self.client_socket.close()
                 QtWidgets.QMessageBox.critical(self, "Error", msg)
                 return
@@ -413,17 +695,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.receiver_thread.start()
 
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", str(e))
+            QtWidgets.QMessageBox.critical(self, "Ошибка", str(e))
 
     def verify_code(self):
         code = self.code_input.text().strip()
         if not code:
-            self.status_label.setText("Enter code")
+            self.status_label.setText("Введите код")
             return
 
         try:
             if not self.pending_socket:
-                self.status_label.setText("No pending verification")
+                self.status_label.setText("Нет ожидающей проверки")
                 return
 
             data = json.dumps({
@@ -451,10 +733,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                     pass
                 self.pending_socket = None
                 self.connect_btn.setEnabled(True)
-                self.show_login_screen("Welcome!")
+                self.show_login_screen("Готово! Можно входить.")
                 return
 
-            msg = resp.get("message", "Verification failed")
+            msg = resp.get("message", "Код не подошёл")
             self.status_label.setText(msg)
 
         except Exception as e:
@@ -475,7 +757,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.client_socket.send(data.encode())
             self.message_input.clear()
         except Exception:
-            QtWidgets.QMessageBox.critical(self, "Error", "Send failed")
+            QtWidgets.QMessageBox.critical(self, "Ошибка", "Не удалось отправить")
 
     # ================= DISPLAY =================
 
@@ -503,6 +785,28 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return
         if data.get("type") == "users":
             self._update_users(data.get("users", []))
+            return
+        if data.get("type") == "profile":
+            username = (data.get("username") or "").strip()
+            profile = data.get("profile") or {}
+            if username:
+                entry = self.user_directory.setdefault(username, {})
+                if isinstance(profile, dict):
+                    entry["nick"] = profile.get("nick", "")
+                    entry["avatar"] = profile.get("avatar", "")
+            dialog = self.profile_dialogs.get(username)
+            if dialog and isinstance(profile, dict):
+                dialog.set_profile(profile)
+            if username == self.username:
+                self._update_user_label()
+            if self.latest_users:
+                self._render_users_list()
+            return
+        if data.get("type") == "note":
+            username = (data.get("username") or "").strip()
+            dialog = self.profile_dialogs.get(username)
+            if dialog:
+                dialog.set_note(data.get("note", ""))
             return
         self._store_message(data)
         if self._should_render(data):
@@ -539,11 +843,13 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             msg_widget.setObjectName("messageMe" if is_me else "messageOther")
             if tp == "dm":
                 if is_me:
-                    name = f"You → {data.get('to', '')}".strip()
+                    target_name = self._display_name(data.get("to", ""))
+                    name = f"You ? {target_name}".strip()
                 else:
-                    name = f"{user} → You"
+                    sender_name = self._display_name(user)
+                    name = f"{sender_name} ? You"
             else:
-                name = "You" if is_me else user
+                name = "You" if is_me else self._display_name(user)
             meta_text = f"{name} • {time}".strip()
             if tp == "dm" and is_me:
                 status = self._dm_status_text(data)
@@ -637,11 +943,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.chat_mode = mode
         self.dm_target = target if mode == "dm" else None
         if mode == "group":
-            self.chat_label.setText("General chat")
+            self.chat_label.setText("Общий чат")
             self.back_btn.setVisible(False)
+            self.users_list.clearSelection()
         else:
-            self.chat_label.setText(f"Direct: {self.dm_target}")
+            display = self._display_name(self.dm_target)
+            if display and display != self.dm_target:
+                self.chat_label.setText(f"Direct: {display} (@{self.dm_target})")
+            else:
+                self.chat_label.setText(f"Direct: {self.dm_target}")
             self.back_btn.setVisible(True)
+            self._select_user_in_list(self.dm_target)
         self._render_conversation()
         if self.chat_mode == "dm":
             self._clear_unread(self.dm_target)
@@ -662,49 +974,58 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         item = self.users_list.itemAt(pos)
         if not item:
             return
+        self.users_list.setCurrentItem(item)
         username = (item.data(QtCore.Qt.UserRole) or "").strip()
         if not username:
             return
 
         menu = QtWidgets.QMenu(self)
 
-        direct_action = QtWidgets.QAction("Direct (ЛС)", self)
+        direct_action = QtWidgets.QAction("Личное сообщение", self)
         direct_action.setEnabled(username != self.username)
         direct_action.triggered.connect(lambda: self.set_chat_mode("dm", username))
         menu.addAction(direct_action)
 
-        profile_action = QtWidgets.QAction("Открыть профиль", self)
+        profile_action = QtWidgets.QAction("Профиль", self)
         profile_action.triggered.connect(lambda: self.show_profile(username))
         menu.addAction(profile_action)
 
         menu.exec_(self.users_list.mapToGlobal(pos))
 
     def show_profile(self, username):
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Профиль")
-        dialog.setModal(True)
-        dialog.setMinimumWidth(320)
+        username = (username or "").strip()
+        if not username:
+            return
+        existing = self.profile_dialogs.get(username)
+        if existing:
+            existing.raise_()
+            existing.activateWindow()
+            return
 
-        layout = QtWidgets.QVBoxLayout(dialog)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        is_self = username == self.username
+        dialog = ProfileDialog(self, self.username, username, is_self)
+        self.profile_dialogs[username] = dialog
+        dialog.finished.connect(lambda _=None, u=username: self.profile_dialogs.pop(u, None))
 
-        title = QtWidgets.QLabel(username)
-        title_font = QtGui.QFont("Segoe UI", 14, QtGui.QFont.Bold)
-        title.setFont(title_font)
-        layout.addWidget(title)
+        dialog.nick_input.textChanged.connect(dialog._update_title)
+        if dialog.change_avatar_btn:
+            dialog.change_avatar_btn.clicked.connect(lambda: self._choose_avatar(dialog))
+        dialog.save_note_btn.clicked.connect(lambda: self._save_note(dialog))
+        if dialog.save_profile_btn:
+            dialog.save_profile_btn.clicked.connect(lambda: self._save_profile(dialog))
 
-        about = QtWidgets.QLabel("О себе: пока что заготовка")
-        about.setWordWrap(True)
-        about.setObjectName("mutedLabel")
-        layout.addWidget(about)
+        cached = self.user_directory.get(username)
+        if cached:
+            dialog.set_profile(cached)
+        else:
+            dialog._update_title()
 
-        close_btn = QtWidgets.QPushButton("Закрыть")
-        close_btn.setObjectName("primaryButton")
-        close_btn.clicked.connect(dialog.accept)
-        layout.addWidget(close_btn, 0, QtCore.Qt.AlignRight)
+        self._request_profile(username)
+        self._request_note(username)
 
-        dialog.exec_()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _dm_status_text(self, data):
         delivered = bool(data.get("delivered", False))
@@ -818,24 +1139,36 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         items = []
         for u in users:
             if isinstance(u, dict):
-                name = u.get("username", "")
+                name = (u.get("username", "") or "").strip()
                 active = bool(u.get("active"))
+                nick = u.get("nick", "")
+                avatar = u.get("avatar", "")
             else:
-                name = str(u)
+                name = str(u).strip()
                 active = False
-            name = name.strip()
+                nick = ""
+                avatar = ""
             if not name:
                 continue
-            items.append((name, active))
+            self.user_directory[name] = {
+                "nick": nick,
+                "avatar": avatar
+            }
+            items.append({"username": name, "active": active})
 
-        items.sort(key=lambda x: (not x[1], x[0].casefold()))
+        items.sort(key=lambda x: (not x["active"], self._display_name(x["username"]).casefold()))
 
         self.latest_users = items
         self._render_users_list()
+        self._update_user_label()
 
     def _render_users_list(self):
         self.users_list.clear()
-        for name, active in self.latest_users:
+        for entry in self.latest_users:
+            name = entry.get("username")
+            active = bool(entry.get("active"))
+            if not name:
+                continue
             item = QtWidgets.QListWidgetItem()
             item.setData(QtCore.Qt.UserRole, name)
             item.setSizeHint(QtCore.QSize(0, 36))
@@ -844,29 +1177,77 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             row = QtWidgets.QWidget(self.users_list)
             row.setObjectName("userRow")
             row_layout = QtWidgets.QHBoxLayout(row)
-            row_layout.setContentsMargins(6, 8, 6, 8)
+            row_layout.setContentsMargins(6, 6, 6, 6)
             row_layout.setSpacing(6)
+            row_layout.setAlignment(QtCore.Qt.AlignVCenter)
+            row.setFixedHeight(35)
+
+            avatar = AvatarLabel(row)
+            avatar.setObjectName("userAvatar")
+            display_name = self._display_name(name)
+            initials = display_name[:1].upper() if display_name else "?"
+            avatar.setText(initials)
+            avatar.setFixedSize(28, 28)
+            avatar.setSizePolicy(
+                QtWidgets.QSizePolicy.Fixed,
+                QtWidgets.QSizePolicy.Fixed
+            )
+            avatar.set_avatar_data(self._avatar_data(name))
+            font = avatar.font()
+            font.setPixelSize(12)
+            font.setBold(True)
+            avatar.setFont(font)
+            avatar.setAlignment(QtCore.Qt.AlignCenter)
+            row_layout.addWidget(avatar, 0, QtCore.Qt.AlignVCenter)
 
             name_label = QtWidgets.QLabel(row)
+            name_label.setAlignment(QtCore.Qt.AlignVCenter)
+            name_label.setFixedHeight(28)
             metrics = QtGui.QFontMetrics(name_label.font())
-            elided = metrics.elidedText(name, QtCore.Qt.ElideRight, 120)
+            elided = metrics.elidedText(display_name, QtCore.Qt.ElideRight, 130)
             name_label.setText(elided)
             name_label.setObjectName("userNameActive" if active else "userNameInactive")
             if active:
                 font = name_label.font()
                 font.setBold(True)
                 name_label.setFont(font)
-            row_layout.addWidget(name_label, 1)
+            row_layout.addWidget(name_label, 1, QtCore.Qt.AlignVCenter)
 
             count = self.unread_counts.get(name, 0)
             badge = QtWidgets.QLabel(row)
             badge.setText(str(count))
             badge.setObjectName("unreadBadge")
             badge.setFixedSize(20, 20)
+            badge.setAlignment(QtCore.Qt.AlignCenter)
             badge.setVisible(count > 0)
-            row_layout.addWidget(badge, 0, QtCore.Qt.AlignRight)
+            row_layout.addWidget(badge, 0, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
 
             self.users_list.setItemWidget(item, row)
+        self._sync_user_selection(self.users_list.currentItem(), None)
+
+    def _select_user_in_list(self, username):
+        if not username:
+            return
+        for i in range(self.users_list.count()):
+            item = self.users_list.item(i)
+            if not item:
+                continue
+            name = (item.data(QtCore.Qt.UserRole) or "").strip()
+            if name == username:
+                self.users_list.setCurrentItem(item)
+                return
+
+    def _sync_user_selection(self, current, previous):
+        for i in range(self.users_list.count()):
+            item = self.users_list.item(i)
+            if not item:
+                continue
+            row = self.users_list.itemWidget(item)
+            if not row:
+                continue
+            row.setProperty("selected", item == current)
+            row.style().unpolish(row)
+            row.style().polish(row)
 
     def _scroll_to_bottom(self):
         bar = self.scroll_area.verticalScrollBar()
@@ -920,7 +1301,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def connection_lost(self):
         if self.running:
             self.running = False
-            QtWidgets.QMessageBox.information(self, "Info", "Connection lost")
+            QtWidgets.QMessageBox.information(self, "Связь", "Соединение потеряно")
             self.show_login_screen()
 
     def closeEvent(self, event):
@@ -949,3 +1330,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

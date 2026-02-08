@@ -37,6 +37,10 @@ class MAXutkoServer:
         self.accounts_lock = threading.Lock()
         self.accounts = self.load_accounts()
 
+        self.notes_path = os.path.join(os.path.dirname(__file__), "notes.json")
+        self.notes_lock = threading.Lock()
+        self.notes = self.load_notes()
+
         self.history_path = os.path.join(os.path.dirname(__file__), "history.json")
         self.history_lock = threading.Lock()
         self.history_limit = 5000
@@ -71,11 +75,33 @@ class MAXutkoServer:
             with open(self.accounts_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
+                for name, item in data.items():
+                    data[name] = self._normalize_account(item)
                 return data
         except:
             pass
 
         return {}
+
+    def _normalize_account(self, data):
+        if not isinstance(data, dict):
+            return {
+                "salt": "",
+                "hash": "",
+                "email": "",
+                "profile": {"nick": "", "about": "", "avatar": ""}
+            }
+        profile = data.get("profile")
+        if not isinstance(profile, dict):
+            profile = {}
+        profile.setdefault("nick", "")
+        profile.setdefault("about", "")
+        profile.setdefault("avatar", "")
+        data["profile"] = profile
+        data.setdefault("salt", "")
+        data.setdefault("hash", "")
+        data.setdefault("email", "")
+        return data
 
 
     def save_accounts(self):
@@ -106,7 +132,12 @@ class MAXutkoServer:
 
         salt = secrets.token_hex(16)
         pw_hash = self._hash_password(password, salt)
-        self.accounts[username] = {"salt": salt, "hash": pw_hash, "email": email}
+        self.accounts[username] = {
+            "salt": salt,
+            "hash": pw_hash,
+            "email": email,
+            "profile": {"nick": "", "about": "", "avatar": ""}
+        }
         self.save_accounts()
 
 
@@ -119,6 +150,47 @@ class MAXutkoServer:
         }
 
         client.send((json.dumps(data) + "\n").encode())
+
+    # ================= NOTES =================
+
+    def load_notes(self):
+
+        if not os.path.exists(self.notes_path):
+            return {}
+
+        try:
+            with open(self.notes_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except:
+            pass
+
+        return {}
+
+
+    def save_notes(self):
+
+        with open(self.notes_path, "w", encoding="utf-8") as f:
+            json.dump(self.notes, f, ensure_ascii=False, indent=2)
+
+
+    def get_note(self, owner, target):
+        with self.notes_lock:
+            user_notes = self.notes.get(owner, {})
+            if not isinstance(user_notes, dict):
+                return ""
+            return user_notes.get(target, "")
+
+
+    def set_note(self, owner, target, note):
+        with self.notes_lock:
+            user_notes = self.notes.setdefault(owner, {})
+            if not isinstance(user_notes, dict):
+                user_notes = {}
+                self.notes[owner] = user_notes
+            user_notes[target] = note
+            self.save_notes()
 
     # ================= HISTORY =================
 
@@ -346,9 +418,15 @@ class MAXutkoServer:
 
         users = []
         for name in all_users:
+            profile = {}
+            with self.accounts_lock:
+                acc = self.accounts.get(name, {})
+                profile = dict(acc.get("profile") or {})
             users.append({
                 "username": name,
-                "active": name in active_users
+                "active": name in active_users,
+                "nick": profile.get("nick", ""),
+                "avatar": profile.get("avatar", "")
             })
 
         return {
@@ -516,7 +594,8 @@ class MAXutkoServer:
                         self.accounts[v_user] = {
                             "salt": pending["salt"],
                             "hash": pending["hash"],
-                            "email": pending["email"]
+                            "email": pending["email"],
+                            "profile": {"nick": "", "about": "", "avatar": ""}
                         }
                         self.save_accounts()
 
@@ -587,6 +666,65 @@ class MAXutkoServer:
                         msg_id = msg.get("id", "")
                         self.mark_dm_read(username, msg_id)
                         continue
+
+                    action = msg.get("action")
+                    if action:
+                        if action == "get_profile":
+                            target = (msg.get("username") or "").strip()
+                            with self.accounts_lock:
+                                acc = self.accounts.get(target)
+                                if acc:
+                                    profile = dict(acc.get("profile") or {})
+                                else:
+                                    profile = {"nick": "", "about": "", "avatar": ""}
+                            payload = {
+                                "type": "profile",
+                                "username": target,
+                                "profile": profile
+                            }
+                            try:
+                                client.send((json.dumps(payload) + "\n").encode())
+                            except:
+                                pass
+                            continue
+                        if action == "update_profile":
+                            nick = msg.get("nick")
+                            about = msg.get("about")
+                            avatar = msg.get("avatar")
+                            with self.accounts_lock:
+                                acc = self.accounts.get(username)
+                                if acc:
+                                    profile = dict(acc.get("profile") or {})
+                                    if isinstance(nick, str):
+                                        profile["nick"] = nick[:32]
+                                    if isinstance(about, str):
+                                        profile["about"] = about[:500]
+                                    if isinstance(avatar, str):
+                                        profile["avatar"] = avatar
+                                    acc["profile"] = profile
+                                    self.accounts[username] = acc
+                                    self.save_accounts()
+                            self.send_user_list()
+                            continue
+                        if action == "get_note":
+                            target = (msg.get("username") or "").strip()
+                            note = self.get_note(username, target) if target else ""
+                            payload = {
+                                "type": "note",
+                                "username": target,
+                                "note": note
+                            }
+                            try:
+                                client.send((json.dumps(payload) + "\n").encode())
+                            except:
+                                pass
+                            continue
+                        if action == "set_note":
+                            target = (msg.get("username") or "").strip()
+                            note = msg.get("note")
+                            if target and isinstance(note, str):
+                                self.set_note(username, target, note[:1000])
+                            continue
 
                     text = msg.get("message")
                     target = msg.get("to", "").strip()
