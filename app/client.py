@@ -7,6 +7,9 @@ import re
 import base64
 import io
 import time
+import secrets
+import queue
+import getpass
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 SERVER_HOST = "26.202.145.247"
@@ -153,12 +156,11 @@ class AvatarLabel(QtWidgets.QLabel):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         rect = self.rect().adjusted(1, 1, -1, -1)
-        rect.translate(0, 1)
 
         border = QtGui.QPen(QtGui.QColor("#e5e7eb"))
         border.setWidth(1)
         painter.setPen(border)
-        painter.setBrush(QtCore.Qt.NoBrush)
+        painter.setBrush(QtGui.QColor("#ffffff"))
         painter.drawEllipse(rect)
 
         if self._pixmap:
@@ -212,6 +214,91 @@ class SenderThread(QtCore.QThread):
                 except Exception as e:
                     self.error.emit(str(e))
                     return
+
+
+class FileUploadWorker(QtCore.QThread):
+    progress = QtCore.pyqtSignal(int, int)
+    finished = QtCore.pyqtSignal(str)
+    error = QtCore.pyqtSignal(str)
+
+    def __init__(self, file_id, file_path, total_size, send_func, ready_event, cancel_event, status_ref):
+        super().__init__()
+        self.file_id = file_id
+        self.file_path = file_path
+        self.total_size = total_size
+        self.send_func = send_func
+        self.ready_event = ready_event
+        self.cancel_event = cancel_event
+        self.status_ref = status_ref
+
+    def run(self):
+        if not self.ready_event.wait(10):
+            self.error.emit("Сервер не подтвердил загрузку")
+            return
+        if not self.status_ref.get("allowed", False):
+            self.error.emit(self.status_ref.get("error", "Загрузка отклонена"))
+            return
+        if self.cancel_event.is_set():
+            return
+        try:
+            sent = 0
+            with open(self.file_path, "rb") as f:
+                while not self.cancel_event.is_set():
+                    chunk = f.read(32 * 1024)
+                    if not chunk:
+                        break
+                    payload = {
+                        "action": "file_upload_chunk",
+                        "file_id": self.file_id,
+                        "data": base64.b64encode(chunk).decode("ascii")
+                    }
+                    self.send_func(payload)
+                    sent += len(chunk)
+                    self.progress.emit(sent, self.total_size)
+            if self.cancel_event.is_set():
+                return
+            self.send_func({"action": "file_upload_end", "file_id": self.file_id})
+            self.finished.emit(self.file_id)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class FileDownloadWorker(QtCore.QThread):
+    progress = QtCore.pyqtSignal(int, int)
+    finished = QtCore.pyqtSignal(str)
+    error = QtCore.pyqtSignal(str)
+
+    def __init__(self, file_id, target_path, total_size):
+        super().__init__()
+        self.file_id = file_id
+        self.target_path = target_path
+        self.total_size = total_size
+        self._queue = queue.Queue()
+        self._running = True
+
+    def add_chunk(self, data):
+        if self._running:
+            self._queue.put(data)
+
+    def finish(self):
+        self._running = False
+        self._queue.put(None)
+
+    def run(self):
+        received = 0
+        try:
+            os.makedirs(os.path.dirname(self.target_path), exist_ok=True)
+            with open(self.target_path, "wb") as f:
+                while True:
+                    item = self._queue.get()
+                    if item is None:
+                        break
+                    f.write(item)
+                    received += len(item)
+                    self.progress.emit(received, self.total_size)
+            self.finished.emit(self.file_id)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class AvatarDecodeRunnable(QtCore.QRunnable):
@@ -537,6 +624,13 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.empty_state_label = None
         self.pending_contact_adds = set()
         self.reply_to_id = None
+        self.upload_states = {}
+        self.upload_states_lock = threading.Lock()
+        self.download_states = {}
+        self.download_states_lock = threading.Lock()
+        self.downloaded_files = {}
+        self.file_button_refs = {}
+        self.downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
 
         self.setup_ui()
         self.show_login_screen()
@@ -829,7 +923,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         self.self_avatar = AvatarLabel(self.user_info)
         self.self_avatar.setObjectName("selfAvatar")
-        self.self_avatar.setFixedSize(36, 36)
+        self.self_avatar.setFixedSize(40, 40)
         avatar_font = self.self_avatar.font()
         avatar_font.setPixelSize(14)
         avatar_font.setBold(True)
@@ -994,16 +1088,31 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         input_row_layout.setContentsMargins(0, 0, 0, 0)
         input_row_layout.setSpacing(8)
 
+        self.input_wrap = QtWidgets.QFrame()
+        self.input_wrap.setObjectName("inputWrap")
+        input_wrap_layout = QtWidgets.QHBoxLayout(self.input_wrap)
+        input_wrap_layout.setContentsMargins(10, 4, 6, 4)
+        input_wrap_layout.setSpacing(6)
+
         self.message_input = MessageInput()
         self.message_input.setObjectName("inputArea")
         self.message_input.setPlaceholderText("Напишите сообщение…")
         self.message_input.send_requested.connect(self.send_message)
 
+        self.attach_btn = QtWidgets.QPushButton("📎")
+        self.attach_btn.setObjectName("attachButton")
+        self.attach_btn.clicked.connect(self._choose_file)
+        self.attach_btn.setFixedSize(32, 32)
+        self.attach_btn.setToolTip("Прикрепить файл")
+
         self.send_btn = QtWidgets.QPushButton("Отправить")
         self.send_btn.setObjectName("primaryButton")
         self.send_btn.clicked.connect(self.send_message)
 
-        input_row_layout.addWidget(self.message_input, 1)
+        input_wrap_layout.addWidget(self.message_input, 1)
+        input_wrap_layout.addWidget(self.attach_btn, 0, QtCore.Qt.AlignBottom)
+
+        input_row_layout.addWidget(self.input_wrap, 1)
         input_row_layout.addWidget(self.send_btn)
 
         bottom_layout.addWidget(self.reply_bar)
@@ -1049,6 +1158,30 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.user_directory = {}
         self.pending_contact_adds = set()
         self.users_search.clear()
+        with self.upload_states_lock:
+            for state in self.upload_states.values():
+                try:
+                    state.get("cancel").set()
+                    dlg = state.get("dialog")
+                    if dlg:
+                        dlg.close()
+                except Exception:
+                    pass
+            self.upload_states = {}
+        with self.download_states_lock:
+            for state in self.download_states.values():
+                try:
+                    worker = state.get("worker")
+                    if worker:
+                        worker.finish()
+                    dlg = state.get("dialog")
+                    if dlg:
+                        dlg.close()
+                except Exception:
+                    pass
+            self.download_states = {}
+        self.downloaded_files = {}
+        self.file_button_refs = {}
         for dlg in list(self.profile_dialogs.values()):
             try:
                 dlg.close()
@@ -1776,6 +1909,347 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         except Exception:
             QtWidgets.QMessageBox.critical(self, "Ошибка", "Не удалось отправить")
 
+    def _choose_file(self):
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Выберите файл",
+            "",
+            "Все файлы (*.*)"
+        )
+        if not file_path:
+            return
+        self._start_file_upload(file_path)
+
+    def _start_file_upload(self, file_path):
+        try:
+            size = os.path.getsize(file_path)
+        except Exception:
+            QtWidgets.QMessageBox.critical(self, "Ошибка", "Не удалось прочитать файл")
+            return
+        if size <= 0:
+            QtWidgets.QMessageBox.information(self, "Файл", "Файл пустой")
+            return
+        if not self.sender_thread:
+            return
+
+        file_id = secrets.token_hex(12)
+        filename = os.path.basename(file_path)
+        target = self.dm_target if self.chat_mode == "dm" and self.dm_target else ""
+
+        ready_event = threading.Event()
+        cancel_event = threading.Event()
+
+        progress = QtWidgets.QProgressDialog(self)
+        progress.setWindowTitle("Загрузка файла")
+        progress.setLabelText(f"Отправка: {filename}")
+        progress.setCancelButtonText("Отмена")
+        progress.setMinimumDuration(0)
+        progress.setRange(0, size)
+        progress.setValue(0)
+
+        def _on_cancel():
+            cancel_event.set()
+            self._send_action({"action": "file_upload_cancel", "file_id": file_id})
+            progress.close()
+
+        progress.canceled.connect(_on_cancel)
+
+        status_ref = {"allowed": False, "error": ""}
+        state = {
+            "event": ready_event,
+            "cancel": cancel_event,
+            "dialog": progress,
+            "path": file_path,
+            "status": status_ref
+        }
+        with self.upload_states_lock:
+            self.upload_states[file_id] = state
+
+        worker = FileUploadWorker(
+            file_id=file_id,
+            file_path=file_path,
+            total_size=size,
+            send_func=self._send_action,
+            ready_event=ready_event,
+            cancel_event=cancel_event,
+            status_ref=status_ref
+        )
+        state["worker"] = worker
+
+        worker.progress.connect(lambda sent, total, d=progress: d.setValue(sent))
+        worker.finished.connect(lambda _fid=file_id: self._finish_upload(_fid))
+        worker.error.connect(lambda msg, _fid=file_id: self._fail_upload(_fid, msg))
+        worker.start()
+
+        self._send_action({
+            "action": "file_upload_start",
+            "file_id": file_id,
+            "filename": filename,
+            "size": size,
+            "to": target,
+            "reply_to": self.reply_to_id
+        })
+        self._clear_reply()
+
+    def _finish_upload(self, file_id):
+        with self.upload_states_lock:
+            state = self.upload_states.pop(file_id, None)
+        if not state:
+            return
+        dialog = state.get("dialog")
+        if dialog:
+            dialog.setValue(dialog.maximum())
+            dialog.close()
+
+    def _fail_upload(self, file_id, message):
+        with self.upload_states_lock:
+            state = self.upload_states.pop(file_id, None)
+        if state:
+            dialog = state.get("dialog")
+            if dialog:
+                dialog.close()
+        if message:
+            QtWidgets.QMessageBox.critical(self, "Ошибка", message)
+
+    def _handle_upload_ready(self, data):
+        file_id = (data.get("file_id") or "").strip()
+        if not file_id:
+            return
+        with self.upload_states_lock:
+            state = self.upload_states.get(file_id)
+        if state:
+            state["status"]["allowed"] = True
+            state["event"].set()
+
+    def _handle_upload_reject(self, data):
+        file_id = (data.get("file_id") or "").strip()
+        message = data.get("message", "Загрузка отклонена")
+        if not file_id:
+            return
+        with self.upload_states_lock:
+            state = self.upload_states.get(file_id)
+        if state:
+            state["cancel"].set()
+            state["status"]["allowed"] = False
+            state["status"]["error"] = message
+            state["event"].set()
+        if state and state["cancel"].is_set() and message == "Canceled":
+            self._finish_upload(file_id)
+            return
+        self._fail_upload(file_id, message)
+
+    def _handle_upload_done(self, data):
+        file_id = (data.get("file_id") or "").strip()
+        if not file_id:
+            return
+        self._finish_upload(file_id)
+
+    def _format_bytes(self, size):
+        try:
+            size = float(size)
+        except Exception:
+            return ""
+        units = ["Б", "КБ", "МБ", "ГБ"]
+        idx = 0
+        while size >= 1024 and idx < len(units) - 1:
+            size /= 1024.0
+            idx += 1
+        if idx == 0:
+            return f"{int(size)} {units[idx]}"
+        return f"{size:.1f} {units[idx]}"
+
+    def _make_download_path(self, filename):
+        safe_name = filename or "file"
+        base_dir = self.downloads_dir
+        os.makedirs(base_dir, exist_ok=True)
+        name, ext = os.path.splitext(safe_name)
+        candidate = os.path.join(base_dir, safe_name)
+        counter = 1
+        while os.path.exists(candidate):
+            candidate = os.path.join(base_dir, f"{name} ({counter}){ext}")
+            counter += 1
+        return candidate
+
+    def _open_downloaded_file(self, path):
+        if not path:
+            return
+        if not os.path.exists(path):
+            QtWidgets.QMessageBox.critical(self, "Ошибка", "Файл не найден")
+            return
+        try:
+            os.startfile(path)
+        except Exception:
+            QtWidgets.QMessageBox.critical(self, "Ошибка", "Не удалось открыть файл")
+
+    def _set_file_button_download(self, button, file_id, filename, size):
+        if not button:
+            return
+        try:
+            button.clicked.disconnect()
+        except Exception:
+            pass
+        button.setText("Скачать")
+        button.setEnabled(bool(file_id))
+        button.clicked.connect(
+            lambda _=None, fid=file_id, fn=filename, sz=size: self._start_file_download(fid, fn, sz)
+        )
+
+    def _set_file_button_open(self, button, path):
+        if not button:
+            return
+        try:
+            button.clicked.disconnect()
+        except Exception:
+            pass
+        button.setText("Открыть")
+        button.setEnabled(True)
+        button.clicked.connect(lambda _=None, p=path: self._open_downloaded_file(p))
+
+    def _register_file_button(self, file_id, button, filename, size):
+        if not file_id:
+            self._set_file_button_download(button, file_id, filename, size)
+            return
+        refs = self.file_button_refs.get(file_id)
+        if refs is None:
+            self.file_button_refs[file_id] = [button]
+        else:
+            refs.append(button)
+        if file_id in self.downloaded_files:
+            self._set_file_button_open(button, self.downloaded_files[file_id])
+        else:
+            self._set_file_button_download(button, file_id, filename, size)
+
+    def _update_file_buttons_open(self, file_id, path):
+        refs = self.file_button_refs.get(file_id, [])
+        if not refs:
+            return
+        stale = []
+        for btn in refs:
+            try:
+                self._set_file_button_open(btn, path)
+            except RuntimeError:
+                stale.append(btn)
+        if stale:
+            self.file_button_refs[file_id] = [b for b in refs if b not in stale]
+
+    def _start_file_download(self, file_id, filename, size):
+        if not file_id:
+            return
+        with self.download_states_lock:
+            if file_id in self.download_states:
+                return
+            dialog = QtWidgets.QProgressDialog(self)
+            dialog.setWindowTitle("Загрузка файла")
+            dialog.setLabelText(f"Скачивание: {filename}")
+            dialog.setCancelButtonText("Отмена")
+            dialog.setMinimumDuration(0)
+            dialog.setRange(0, int(size) if int(size or 0) > 0 else 0)
+            dialog.setValue(0)
+            state = {"dialog": dialog, "worker": None, "filename": filename, "size": int(size or 0)}
+            self.download_states[file_id] = state
+
+        dialog.canceled.connect(lambda _fid=file_id: self._cancel_download(_fid))
+        self._send_action({"action": "file_request", "file_id": file_id})
+
+    def _cancel_download(self, file_id):
+        with self.download_states_lock:
+            state = self.download_states.pop(file_id, None)
+        if not state:
+            return
+        worker = state.get("worker")
+        if worker:
+            worker.finish()
+        dialog = state.get("dialog")
+        if dialog:
+            dialog.close()
+
+    def _handle_file_info(self, data):
+        file_id = (data.get("file_id") or "").strip()
+        if not file_id:
+            return
+        filename = data.get("filename") or "file"
+        size = int(data.get("size") or 0)
+
+        with self.download_states_lock:
+            state = self.download_states.get(file_id)
+        if not state:
+            self._start_file_download(file_id, filename, size)
+            with self.download_states_lock:
+                state = self.download_states.get(file_id)
+        if not state:
+            return
+        if state.get("worker"):
+            return
+
+        dialog = state.get("dialog")
+        if dialog:
+            dialog.setLabelText(f"Скачивание: {filename}")
+            dialog.setRange(0, size if size > 0 else 0)
+
+        target_path = self._make_download_path(filename)
+        worker = FileDownloadWorker(file_id, target_path, size)
+        state["worker"] = worker
+        state["path"] = target_path
+        state["size"] = size
+        worker.progress.connect(lambda rec, total, d=dialog: d.setValue(rec))
+        worker.finished.connect(lambda _fid=file_id: self._finish_download(_fid))
+        worker.error.connect(lambda msg, _fid=file_id: self._fail_download(_fid, msg))
+        worker.start()
+
+    def _handle_file_chunk(self, data):
+        file_id = (data.get("file_id") or "").strip()
+        if not file_id:
+            return
+        chunk_b64 = data.get("data")
+        if not chunk_b64:
+            return
+        with self.download_states_lock:
+            state = self.download_states.get(file_id)
+        if not state or not state.get("worker"):
+            return
+        try:
+            raw = base64.b64decode(chunk_b64)
+        except Exception:
+            return
+        state["worker"].add_chunk(raw)
+
+    def _handle_file_end(self, data):
+        file_id = (data.get("file_id") or "").strip()
+        ok = bool(data.get("ok", True))
+        with self.download_states_lock:
+            state = self.download_states.get(file_id)
+        if not state:
+            return
+        worker = state.get("worker")
+        if worker:
+            worker.finish()
+        if not ok:
+            self._fail_download(file_id, "Загрузка завершилась ошибкой")
+
+    def _finish_download(self, file_id):
+        with self.download_states_lock:
+            state = self.download_states.pop(file_id, None)
+        if not state:
+            return
+        dialog = state.get("dialog")
+        if dialog:
+            dialog.setValue(dialog.maximum())
+            dialog.close()
+        path = state.get("path")
+        if path:
+            self.downloaded_files[file_id] = path
+            self._update_file_buttons_open(file_id, path)
+
+    def _fail_download(self, file_id, message):
+        with self.download_states_lock:
+            state = self.download_states.pop(file_id, None)
+        if state:
+            dialog = state.get("dialog")
+            if dialog:
+                dialog.close()
+        if message:
+            QtWidgets.QMessageBox.critical(self, "Ошибка", message)
+
     def _clear_reply(self):
         self.reply_to_id = None
         if getattr(self, "reply_bar", None):
@@ -1791,6 +2265,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return text
         return text[: max(0, limit - 1)].rstrip() + "…"
 
+    def _message_preview_text(self, data):
+        if not isinstance(data, dict):
+            return ""
+        if data.get("type") == "file":
+            name = data.get("filename") or "file"
+            return f"Файл: {name}"
+        return data.get("message", "")
+
     def _start_reply(self, data):
         if not isinstance(data, dict):
             return
@@ -1803,7 +2285,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         else:
             display = self._display_name(sender)
         self.reply_to_id = msg_id
-        snippet = self._clip_text(data.get("message", ""), 160)
+        snippet = self._clip_text(self._message_preview_text(data), 160)
         self.reply_meta_label.setText(f"Ответ на {display}")
         self.reply_body_label.setText(snippet if snippet else "Без текста")
         self.reply_bar.setVisible(True)
@@ -1845,7 +2327,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             display = self._display_name(sender)
         return {
             "title": f"Ответ на {display}",
-            "body": self._clip_text(original.get("message", ""), 140) or "Без текста"
+            "body": self._clip_text(self._message_preview_text(original), 140) or "Без текста"
         }
 
     def _show_message_menu(self, widget, pos, data):
@@ -1941,6 +2423,27 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if dialog:
                 dialog.set_note(data.get("note", ""))
             return
+        if data.get("type") == "file_upload_ready":
+            self._handle_upload_ready(data)
+            return
+        if data.get("type") == "file_upload_reject":
+            self._handle_upload_reject(data)
+            return
+        if data.get("type") == "file_upload_done":
+            self._handle_upload_done(data)
+            return
+        if data.get("type") == "file_info":
+            self._handle_file_info(data)
+            return
+        if data.get("type") == "file_chunk":
+            self._handle_file_chunk(data)
+            return
+        if data.get("type") == "file_end":
+            self._handle_file_end(data)
+            return
+        if data.get("type") == "file_error":
+            self._fail_download((data.get("file_id") or "").strip(), data.get("message", "Ошибка загрузки"))
+            return
         self._store_message(data)
         if self._should_render(data):
             self._render_message(data)
@@ -1992,7 +2495,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 reply_layout.addWidget(reply_body)
                 msg_layout.addWidget(reply_frame)
 
-            if tp == "dm":
+            is_dm = tp == "dm" or (tp == "file" and data.get("to"))
+            if is_dm:
                 if is_me:
                     target_name = self._display_name(data.get("to", ""))
                     name = f"You -> {target_name}".strip()
@@ -2002,16 +2506,35 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             else:
                 name = "You" if is_me else self._display_name(user)
             meta_text = f"{name} • {time}".strip()
-            if tp == "dm" and is_me:
+            if is_dm and is_me and ("delivered" in data or "read" in data):
                 status = self._dm_status_text(data)
                 if status:
                     meta_text = f"{meta_text} • {status}".strip()
             meta = QtWidgets.QLabel(meta_text)
             meta.setObjectName("mutedLabel")
-            body = QtWidgets.QLabel(text)
-            body.setWordWrap(True)
             msg_layout.addWidget(meta)
-            msg_layout.addWidget(body)
+            if tp == "file":
+                file_name = data.get("filename") or "file"
+                size_val = data.get("size")
+                size_text = self._format_bytes(size_val) if size_val is not None else ""
+                file_label = QtWidgets.QLabel(f"{file_name} {f'({size_text})' if size_text else ''}".strip())
+                file_label.setWordWrap(True)
+                download_btn = QtWidgets.QPushButton("Скачать")
+                download_btn.setObjectName("ghostButton")
+                file_id = data.get("file_id")
+                download_btn.setEnabled(bool(file_id))
+                download_btn.clicked.connect(
+                    lambda _=None, fid=file_id, fn=file_name, sz=size_val: self._start_file_download(fid, fn, sz)
+                )
+                file_row = QtWidgets.QHBoxLayout()
+                file_row.setSpacing(6)
+                file_row.addWidget(file_label, 1)
+                file_row.addWidget(download_btn, 0, QtCore.Qt.AlignRight)
+                msg_layout.addLayout(file_row)
+            else:
+                body = QtWidgets.QLabel(text)
+                body.setWordWrap(True)
+                msg_layout.addWidget(body)
             alignment = QtCore.Qt.AlignRight if is_me else QtCore.Qt.AlignLeft
             msg_type = "chat"
 
@@ -2056,7 +2579,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def _store_message(self, data):
         tp = data.get("type", "message")
-        if tp == "dm":
+        if tp == "dm" or (tp == "file" and data.get("to")):
             msg_id = data.get("id")
             if msg_id:
                 existing = self.message_index.get(msg_id)
@@ -2078,7 +2601,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def _should_render(self, data):
         tp = data.get("type", "message")
-        if tp == "dm":
+        if tp == "dm" or (tp == "file" and data.get("to")):
             if self.chat_mode != "dm" or not self.dm_target:
                 return False
             return self._conversation_key_for_dm(data) == f"dm:{self.dm_target}"
@@ -2223,7 +2746,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if not key.startswith("dm:"):
                 continue
             for item in items:
-                if item.get("type") != "dm":
+                if item.get("type") not in ("dm", "file"):
                     continue
                 if item.get("to") != self.username:
                     continue
@@ -2237,7 +2760,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.unread_counts[self.dm_target] = 0
 
     def _maybe_increment_unread(self, data):
-        if data.get("type") != "dm":
+        if data.get("type") not in ("dm", "file"):
             return
         if data.get("to") != self.username:
             return
@@ -2275,6 +2798,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _maybe_send_read_receipt(self, data):
         if self.chat_mode != "dm" or self.dm_target != data.get("username"):
             return
+        if data.get("type") not in ("dm", "file"):
+            return
         msg_id = data.get("id")
         if not msg_id:
             return
@@ -2291,6 +2816,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         items = self.conversations.get(f"dm:{self.dm_target}", [])
         for item in items:
             if item.get("username") == self.username:
+                continue
+            if item.get("type") not in ("dm", "file"):
                 continue
             if item.get("read"):
                 continue
@@ -2427,18 +2954,19 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             active = bool(entry.get("active"))
             if not name:
                 continue
+            row_height = 40 if is_search else 36
             item = QtWidgets.QListWidgetItem()
             item.setData(QtCore.Qt.UserRole, name)
-            item.setSizeHint(QtCore.QSize(0, 36 if not is_search else 40))
+            item.setSizeHint(QtCore.QSize(0, row_height))
             self.users_list.addItem(item)
 
             row = QtWidgets.QWidget(self.users_list)
             row.setObjectName("userRow")
             row_layout = QtWidgets.QHBoxLayout(row)
-            row_layout.setContentsMargins(6, 6, 6, 6)
+            row_layout.setContentsMargins(4, 4, 4, 4)
             row_layout.setSpacing(6)
             row_layout.setAlignment(QtCore.Qt.AlignVCenter)
-            row.setFixedHeight(35)
+            row.setFixedHeight(row_height)
 
             avatar = AvatarLabel(row)
             avatar.setObjectName("userAvatar")

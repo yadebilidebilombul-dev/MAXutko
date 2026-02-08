@@ -26,10 +26,8 @@ QMainWindow, QStackedWidget {
 }
 
 #selfAvatar {
-    background: #ffffff;
     color: #9ca3af;
-    border: 1px solid #e5e7eb;
-    border-radius: 18px;
+    border-radius: 20px;
 }
 
 #userNameLabel {
@@ -81,6 +79,27 @@ QLineEdit, QTextEdit {
 #inputArea {
     min-height: 46px;
     max-height: 46px;
+    border: none;
+    padding: 8px 4px 8px 2px;
+    background: transparent;
+}
+
+#inputWrap {
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+}
+
+#attachButton {
+    background: #eef2ff;
+    color: #1d4ed8;
+    border: 1px solid #c7d2fe;
+    border-radius: 16px;
+    padding: 0px;
+}
+
+#attachButton:hover {
+    background: #e0e7ff;
 }
 
 QPushButton#primaryButton {
@@ -173,11 +192,9 @@ QScrollArea {
 #userAvatar {
     background: transparent;
     color: #9ca3af;
-    border: 1px solid #e5e7eb;
     border-radius: 13px;
     font-weight: 600;
     padding: 0px;
-    margin-top: -2px;
 }
 
 #userNameActive {

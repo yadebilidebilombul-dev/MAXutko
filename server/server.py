@@ -7,6 +7,7 @@ import time
 import hashlib
 import secrets
 import sys
+import base64
 from datetime import datetime
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -80,6 +81,18 @@ class MAXutkoServer:
         self.mailer = MailSender()
         self.rate_limits = {}
         self.rate_limits_lock = threading.Lock()
+
+        self.files_dir = os.path.join(os.path.dirname(__file__), "files")
+        os.makedirs(self.files_dir, exist_ok=True)
+        self.file_index_path = os.path.join(os.path.dirname(__file__), "files_index.json")
+        self.file_index_lock = threading.Lock()
+        self.file_index = self.load_file_index()
+        self.file_uploads = {}
+        self.file_uploads_lock = threading.Lock()
+        self.max_file_size = 100 * 1024 * 1024
+
+        self.send_locks = {}
+        self.send_locks_lock = threading.Lock()
 
 
     # ================= ACCOUNTS =================
@@ -257,6 +270,63 @@ class MAXutkoServer:
             return item.get("username")
 
 
+    # ================= FILES =================
+
+    def load_file_index(self):
+        if not os.path.exists(self.file_index_path):
+            return {}
+        try:
+            with open(self.file_index_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                cleaned = {}
+                for fid, item in data.items():
+                    if not isinstance(item, dict):
+                        continue
+                    path = item.get("path")
+                    if not path or not os.path.exists(path):
+                        continue
+                    cleaned[fid] = item
+                return cleaned
+        except Exception:
+            pass
+        return {}
+
+    def save_file_index(self):
+        with open(self.file_index_path, "w", encoding="utf-8") as f:
+            json.dump(self.file_index, f, ensure_ascii=False, indent=2)
+
+    def _sanitize_filename(self, name):
+        base = os.path.basename(name or "").strip()
+        base = re.sub(r"[^\w\-. ()\[\]]+", "_", base, flags=re.UNICODE)
+        if not base:
+            base = "file"
+        return base[:180]
+
+    def _safe_send(self, sock, data):
+        if sock is None:
+            return False
+        try:
+            if isinstance(data, str):
+                data = data.encode()
+            with self.send_locks_lock:
+                lock = self.send_locks.get(sock)
+            if lock:
+                with lock:
+                    sock.sendall(data)
+            else:
+                sock.sendall(data)
+            return True
+        except Exception:
+            return False
+
+    def _safe_send_json(self, sock, payload):
+        try:
+            return self._safe_send(sock, json.dumps(payload) + "\n")
+        except Exception:
+            return False
+
+
     def _hash_password(self, password, salt):
 
         return hashlib.sha256((salt + password).encode()).hexdigest()
@@ -313,8 +383,7 @@ class MAXutkoServer:
             data["token"] = token
         if username:
             data["username"] = username
-
-        client.send((json.dumps(data) + "\n").encode())
+        self._safe_send_json(client, data)
 
     def _rate_limit(self, key, limit, window_seconds):
         now = time.time()
@@ -384,7 +453,7 @@ class MAXutkoServer:
                 for item in data:
                     if not isinstance(item, dict):
                         continue
-                    if item.get("type") != "message":
+                    if item.get("type") not in ("message", "file"):
                         continue
                     if not item.get("id"):
                         item["id"] = secrets.token_hex(12)
@@ -427,7 +496,7 @@ class MAXutkoServer:
             "items": items
         }
 
-        client.send((json.dumps(payload) + "\n").encode())
+        self._safe_send_json(client, payload)
 
     # ================= DM HISTORY =================
 
@@ -563,10 +632,7 @@ class MAXutkoServer:
 
     def send_contacts(self, target_client, username):
         payload = self._build_contacts_payload(username)
-        try:
-            target_client.send((json.dumps(payload) + "\n").encode())
-        except:
-            pass
+        self._safe_send_json(target_client, payload)
 
     def send_all_contacts(self):
         with self.clients_lock:
@@ -619,7 +685,7 @@ class MAXutkoServer:
 
         with self.dm_history_lock:
             for msg in self.dm_history:
-                if msg.get("type") != "dm":
+                if msg.get("type") not in ("dm", "file"):
                     continue
                 if msg.get("username") == username or msg.get("to") == username:
                     if msg.get("to") == username and not msg.get("delivered", False):
@@ -638,10 +704,7 @@ class MAXutkoServer:
             "type": "dm_history",
             "items": items
         }
-        try:
-            client.send((json.dumps(payload) + "\n").encode())
-        except:
-            pass
+        self._safe_send_json(client, payload)
 
         for item in to_notify:
             sender = item.get("sender")
@@ -688,11 +751,8 @@ class MAXutkoServer:
 
         target_sock = self._socket_by_username(username)
         if target_sock:
-            try:
-                target_sock.send((json.dumps(payload) + "\n").encode())
-            except:
-                pass
-            return
+            if self._safe_send_json(target_sock, payload):
+                return
 
         with self.receipts_lock:
             user_receipts = self.receipts_pending.setdefault(username, {})
@@ -721,10 +781,7 @@ class MAXutkoServer:
                 payload["delivered"] = bool(status["delivered"])
             if "read" in status:
                 payload["read"] = bool(status["read"])
-            try:
-                client.send((json.dumps(payload) + "\n").encode())
-            except:
-                pass
+            self._safe_send_json(client, payload)
     # ================= USERS =================
 
     def _build_users_payload(self):
@@ -755,21 +812,13 @@ class MAXutkoServer:
 
     def send_user_list(self, target_client=None):
         payload = self._build_users_payload()
-        raw = (json.dumps(payload) + "\n").encode()
-
         if target_client is not None:
-            try:
-                target_client.send(raw)
-            except:
-                pass
+            self._safe_send_json(target_client, payload)
             return
 
         with self.clients_lock:
             for c in list(self.clients.keys()):
-                try:
-                    c.send(raw)
-                except:
-                    pass
+                self._safe_send_json(c, payload)
 
     def _search_users(self, query, requester=""):
         q = (query or "").strip().casefold()
@@ -1121,6 +1170,8 @@ class MAXutkoServer:
                     return
 
                 self.clients[client] = username
+            with self.send_locks_lock:
+                self.send_locks[client] = threading.Lock()
 
             token_value = self._issue_token(username)
             self.send_auth(client, "ok", token=token_value, username=username)
@@ -1132,7 +1183,7 @@ class MAXutkoServer:
                     "type": "session",
                     "username": username
                 }
-                client.send((json.dumps(session_payload) + "\n").encode())
+                self._safe_send_json(client, session_payload)
             except:
                 pass
 
@@ -1172,6 +1223,21 @@ class MAXutkoServer:
 
                     action = msg.get("action")
                     if action:
+                        if action == "file_upload_start":
+                            self._handle_file_upload_start(username, msg, client)
+                            continue
+                        if action == "file_upload_chunk":
+                            self._handle_file_upload_chunk(username, msg, client)
+                            continue
+                        if action == "file_upload_end":
+                            self._handle_file_upload_end(username, msg, client)
+                            continue
+                        if action == "file_upload_cancel":
+                            self._handle_file_upload_cancel(username, msg, client)
+                            continue
+                        if action == "file_request":
+                            self._handle_file_request(username, msg, client)
+                            continue
                         if action == "get_profile":
                             target = (msg.get("username") or "").strip()
                             acc = self._refresh_account_clan_for_user(target)
@@ -1184,10 +1250,7 @@ class MAXutkoServer:
                                 "username": target,
                                 "profile": profile
                             }
-                            try:
-                                client.send((json.dumps(payload) + "\n").encode())
-                            except:
-                                pass
+                            self._safe_send_json(client, payload)
                             continue
                         if action == "update_profile":
                             nick = msg.get("nick")
@@ -1217,10 +1280,7 @@ class MAXutkoServer:
                                 "query": query,
                                 "results": results
                             }
-                            try:
-                                client.send((json.dumps(payload) + "\n").encode())
-                            except:
-                                pass
+                            self._safe_send_json(client, payload)
                             continue
                         if action == "add_contact":
                             target = (msg.get("username") or "").strip()
@@ -1252,10 +1312,7 @@ class MAXutkoServer:
                                 "username": target,
                                 "note": note
                             }
-                            try:
-                                client.send((json.dumps(payload) + "\n").encode())
-                            except:
-                                pass
+                            self._safe_send_json(client, payload)
                             continue
                         if action == "set_note":
                             target = (msg.get("username") or "").strip()
@@ -1330,16 +1387,9 @@ class MAXutkoServer:
 
         self.append_history(data)
 
-        raw = (json.dumps(data) + "\n").encode()
-
         with self.clients_lock:
-
             for c in list(self.clients.keys()):
-
-                try:
-                    c.send(raw)
-                except:
-                    pass
+                self._safe_send_json(c, data)
 
 
     def _socket_by_username(self, username):
@@ -1378,18 +1428,304 @@ class MAXutkoServer:
 
         self.append_dm_history(dict(data))
 
-        raw = (json.dumps(data) + "\n").encode()
+        if target_sock:
+            self._safe_send_json(target_sock, data)
+        if sender_sock:
+            self._safe_send_json(sender_sock, data)
+
+
+    # ================= FILE TRANSFER =================
+
+    def _build_file_payload(self, sender, target, file_id, filename, size, reply_to=None):
+        msg_id = secrets.token_hex(12)
+        data = {
+            "id": msg_id,
+            "username": sender,
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "type": "file",
+            "file_id": file_id,
+            "filename": filename,
+            "size": size
+        }
+        if reply_to:
+            data["reply_to"] = reply_to
+        if target:
+            data["to"] = target
+            data["delivered"] = self._socket_by_username(target) is not None
+            data["read"] = False
+        return data
+
+    def send_direct_file(self, sender, target, file_id, filename, size, reply_to=None):
+        self._add_contact_pair(sender, target)
+        sender_sock = self._socket_by_username(sender)
+        target_sock = self._socket_by_username(target)
+        if sender_sock:
+            self.send_contacts(sender_sock, sender)
+        if target_sock:
+            self.send_contacts(target_sock, target)
+
+        data = self._build_file_payload(sender, target, file_id, filename, size, reply_to)
+        self.append_dm_history(dict(data))
 
         if target_sock:
-            try:
-                target_sock.send(raw)
-            except:
-                pass
+            self._safe_send_json(target_sock, data)
         if sender_sock:
-            try:
-                sender_sock.send(raw)
-            except:
-                pass
+            self._safe_send_json(sender_sock, data)
+
+    def broadcast_file(self, sender, file_id, filename, size, reply_to=None):
+        data = self._build_file_payload(sender, "", file_id, filename, size, reply_to)
+        self.append_history(data)
+        with self.clients_lock:
+            for c in list(self.clients.keys()):
+                self._safe_send_json(c, data)
+
+    def _handle_file_upload_start(self, username, msg, client):
+        file_id = (msg.get("file_id") or "").strip()
+        filename = (msg.get("filename") or "").strip()
+        try:
+            size = int(msg.get("size") or 0)
+        except Exception:
+            size = 0
+        target = (msg.get("to") or "").strip()
+        reply_to = msg.get("reply_to")
+
+        if not file_id or not filename or size <= 0:
+            self._safe_send_json(client, {
+                "type": "file_upload_reject",
+                "file_id": file_id,
+                "message": "Invalid file"
+            })
+            return
+        if size > self.max_file_size:
+            self._safe_send_json(client, {
+                "type": "file_upload_reject",
+                "file_id": file_id,
+                "message": "File too large"
+            })
+            return
+        if target and not self._user_exists(target):
+            self._safe_send_json(client, {
+                "type": "file_upload_reject",
+                "file_id": file_id,
+                "message": "User not found"
+            })
+            return
+
+        safe_name = self._sanitize_filename(filename)
+        file_path = os.path.join(self.files_dir, f"{file_id}_{safe_name}")
+
+        try:
+            fp = open(file_path, "wb")
+        except Exception:
+            self._safe_send_json(client, {
+                "type": "file_upload_reject",
+                "file_id": file_id,
+                "message": "Failed to open file"
+            })
+            return
+
+        with self.file_uploads_lock:
+            if file_id in self.file_uploads:
+                try:
+                    fp.close()
+                except Exception:
+                    pass
+                self._safe_send_json(client, {
+                    "type": "file_upload_reject",
+                    "file_id": file_id,
+                    "message": "File already exists"
+                })
+                return
+            self.file_uploads[file_id] = {
+                "owner": username,
+                "target": target,
+                "filename": safe_name,
+                "size": size,
+                "received": 0,
+                "path": file_path,
+                "fp": fp,
+                "reply_to": reply_to,
+                "created_at": int(time.time())
+            }
+
+        self._safe_send_json(client, {"type": "file_upload_ready", "file_id": file_id})
+
+    def _handle_file_upload_chunk(self, username, msg, client):
+        file_id = (msg.get("file_id") or "").strip()
+        data_b64 = msg.get("data")
+        if not file_id or not data_b64:
+            return
+        with self.file_uploads_lock:
+            state = self.file_uploads.get(file_id)
+        if not state or state.get("owner") != username:
+            return
+        try:
+            chunk = base64.b64decode(data_b64)
+        except Exception:
+            self._safe_send_json(client, {
+                "type": "file_upload_reject",
+                "file_id": file_id,
+                "message": "Invalid chunk"
+            })
+            return
+        try:
+            state["fp"].write(chunk)
+            state["received"] += len(chunk)
+            if state["received"] > state["size"]:
+                raise Exception("Size overflow")
+        except Exception:
+            self._safe_send_json(client, {
+                "type": "file_upload_reject",
+                "file_id": file_id,
+                "message": "Failed to write"
+            })
+            self._cleanup_upload(file_id)
+            return
+
+    def _handle_file_upload_end(self, username, msg, client):
+        file_id = (msg.get("file_id") or "").strip()
+        if not file_id:
+            return
+        with self.file_uploads_lock:
+            state = self.file_uploads.get(file_id)
+        if not state or state.get("owner") != username:
+            return
+        if state.get("received", 0) != state.get("size", 0):
+            self._safe_send_json(client, {
+                "type": "file_upload_reject",
+                "file_id": file_id,
+                "message": "Size mismatch"
+            })
+            self._cleanup_upload(file_id)
+            return
+
+        try:
+            state["fp"].close()
+        except Exception:
+            pass
+
+        with self.file_uploads_lock:
+            self.file_uploads.pop(file_id, None)
+
+        meta = {
+            "filename": state.get("filename"),
+            "size": state.get("size"),
+            "path": state.get("path"),
+            "owner": username,
+            "target": state.get("target"),
+            "created_at": state.get("created_at"),
+            "scope": "dm" if state.get("target") else "group"
+        }
+        with self.file_index_lock:
+            self.file_index[file_id] = meta
+            self.save_file_index()
+
+        target = state.get("target") or ""
+        if target:
+            self.send_direct_file(username, target, file_id, meta["filename"], meta["size"], state.get("reply_to"))
+        else:
+            self.broadcast_file(username, file_id, meta["filename"], meta["size"], state.get("reply_to"))
+
+        self._safe_send_json(client, {"type": "file_upload_done", "file_id": file_id})
+
+    def _handle_file_upload_cancel(self, username, msg, client):
+        file_id = (msg.get("file_id") or "").strip()
+        if not file_id:
+            return
+        with self.file_uploads_lock:
+            state = self.file_uploads.get(file_id)
+        if not state or state.get("owner") != username:
+            return
+        self._cleanup_upload(file_id)
+        self._safe_send_json(client, {"type": "file_upload_reject", "file_id": file_id, "message": "Canceled"})
+
+    def _cleanup_upload(self, file_id):
+        with self.file_uploads_lock:
+            state = self.file_uploads.pop(file_id, None)
+        if not state:
+            return
+        try:
+            fp = state.get("fp")
+            if fp:
+                fp.close()
+        except Exception:
+            pass
+        try:
+            path = state.get("path")
+            if path and os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    def _handle_file_request(self, username, msg, client):
+        file_id = (msg.get("file_id") or "").strip()
+        if not file_id:
+            return
+        with self.file_index_lock:
+            meta = self.file_index.get(file_id)
+        if not meta:
+            self._safe_send_json(client, {
+                "type": "file_error",
+                "file_id": file_id,
+                "message": "File not found"
+            })
+            return
+
+        scope = meta.get("scope")
+        if scope == "dm":
+            if username not in {meta.get("owner"), meta.get("target")}:
+                self._safe_send_json(client, {
+                    "type": "file_error",
+                    "file_id": file_id,
+                    "message": "Not allowed"
+                })
+                return
+
+        path = meta.get("path")
+        if not path or not os.path.exists(path):
+            self._safe_send_json(client, {
+                "type": "file_error",
+                "file_id": file_id,
+                "message": "Missing file"
+            })
+            return
+
+        threading.Thread(
+            target=self._stream_file_to_client,
+            args=(client, file_id, meta),
+            daemon=True
+        ).start()
+
+    def _stream_file_to_client(self, client, file_id, meta):
+        filename = meta.get("filename") or "file"
+        size = int(meta.get("size") or 0)
+        path = meta.get("path")
+        if not self._safe_send_json(client, {
+            "type": "file_info",
+            "file_id": file_id,
+            "filename": filename,
+            "size": size
+        }):
+            return
+        try:
+            seq = 0
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(32 * 1024)
+                    if not chunk:
+                        break
+                    payload = {
+                        "type": "file_chunk",
+                        "file_id": file_id,
+                        "seq": seq,
+                        "data": base64.b64encode(chunk).decode("ascii")
+                    }
+                    if not self._safe_send_json(client, payload):
+                        return
+                    seq += 1
+            self._safe_send_json(client, {"type": "file_end", "file_id": file_id, "ok": True})
+        except Exception:
+            self._safe_send_json(client, {"type": "file_end", "file_id": file_id, "ok": False})
 
 
     def mark_dm_read(self, username, msg_id):
@@ -1425,16 +1761,9 @@ class MAXutkoServer:
 
         self.append_history(data)
 
-        raw = (json.dumps(data) + "\n").encode()
-
         with self.clients_lock:
-
             for c in list(self.clients.keys()):
-
-                try:
-                    c.send(raw)
-                except:
-                    pass
+                self._safe_send_json(c, data)
 
 
     # ================= REMOVE =================
@@ -1449,6 +1778,16 @@ class MAXutkoServer:
             username = self.clients[client]
 
             del self.clients[client]
+        with self.send_locks_lock:
+            self.send_locks.pop(client, None)
+
+        cleanup_ids = []
+        with self.file_uploads_lock:
+            for fid, state in list(self.file_uploads.items()):
+                if state.get("owner") == username:
+                    cleanup_ids.append(fid)
+        for fid in cleanup_ids:
+            self._cleanup_upload(fid)
 
         try:
             client.close()

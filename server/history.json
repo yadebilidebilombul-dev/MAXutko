@@ -2606,5 +2606,149 @@
     "message": "iwantriker left the chat",
     "timestamp": "",
     "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "id": "45b3bfcbb92f6afb9fb7c892",
+    "username": "iwantriker",
+    "timestamp": "23:32:20",
+    "type": "file",
+    "file_id": "f2907780f9f86f329a43b363",
+    "filename": "photo_2025-10-16_17-03-34.jpg",
+    "size": 50994
+  },
+  {
+    "id": "38530482105dc4b6fcaa5ad3",
+    "username": "iwantriker",
+    "timestamp": "23:35:02",
+    "type": "file",
+    "file_id": "f38358d050457c01e7fdf133",
+    "filename": "BIOSorig.bin",
+    "size": 8388608
+  },
+  {
+    "id": "4510ec6c372fb4b17a0e918f",
+    "username": "iwantriker",
+    "timestamp": "23:35:26",
+    "type": "file",
+    "file_id": "a593c8961bf6ce8714579ff5",
+    "filename": "ренде.mp4",
+    "size": 37583974
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "id": "eae8c51518b83674b90b3320",
+    "username": "iwantriker",
+    "timestamp": "23:40:51",
+    "type": "file",
+    "file_id": "aef095e7da0b9133a5b675bf",
+    "filename": "это психическое расстройство уже.mp3",
+    "size": 2987421
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "test joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "test left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "test joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "test left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "test joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "test left the chat",
+    "timestamp": "",
+    "type": "system"
   }
 ]
