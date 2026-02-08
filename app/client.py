@@ -433,12 +433,21 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.conversations = {"group": []}
         self.message_index = {}
         self.unread_counts = {}
+        self.contact_items = []
+        self.search_items = []
+        self.search_query = ""
         self.latest_users = []
         self.user_directory = {}
         self.profile_dialogs = {}
         self.avatar_cache_path = os.path.join(os.path.dirname(__file__), "avatar_cache.json")
         self.avatar_cache = self._load_avatar_cache()
         self.auth_token_path = os.path.join(os.path.dirname(__file__), "auth_token.json")
+        self.search_timer = QtCore.QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(300)
+        self.search_timer.timeout.connect(self._send_search_request)
+        self.empty_state_label = None
+        self.pending_contact_adds = set()
 
         self.setup_ui()
         self.show_login_screen()
@@ -761,9 +770,22 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         users_layout.setContentsMargins(10, 10, 10, 10)
         users_layout.setSpacing(8)
 
-        users_title = QtWidgets.QLabel("Онлайн")
-        users_title.setObjectName("usersTitle")
-        users_layout.addWidget(users_title)
+        self.users_title = QtWidgets.QLabel("Контакты")
+        self.users_title.setObjectName("usersTitle")
+        users_layout.addWidget(self.users_title)
+
+        self.users_search = QtWidgets.QLineEdit()
+        self.users_search.setPlaceholderText("Поиск по никнейму")
+        self.users_search.setObjectName("input")
+        self.users_search.textChanged.connect(self._on_search_text_changed)
+        users_layout.addWidget(self.users_search)
+
+        self.empty_state_label = QtWidgets.QLabel("")
+        self.empty_state_label.setObjectName("mutedLabel")
+        self.empty_state_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.empty_state_label.setWordWrap(True)
+        self.empty_state_label.setVisible(False)
+        users_layout.addWidget(self.empty_state_label)
 
         self.users_list = QtWidgets.QListWidget()
         self.users_list.setObjectName("usersList")
@@ -844,8 +866,13 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.conversations = {"group": []}
         self.message_index = {}
         self.unread_counts = {}
+        self.contact_items = []
+        self.search_items = []
+        self.search_query = ""
         self.latest_users = []
         self.user_directory = {}
+        self.pending_contact_adds = set()
+        self.users_search.clear()
         for dlg in list(self.profile_dialogs.values()):
             try:
                 dlg.close()
@@ -897,15 +924,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 with open(self.auth_token_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
-                    return data.get("token", "")
+                    token = data.get("token", "")
+                    username = (data.get("username") or "").strip()
+                    return token, username
         except Exception:
             pass
-        return ""
+        return "", ""
 
     def _save_token(self, token):
         try:
             with open(self.auth_token_path, "w", encoding="utf-8") as f:
-                json.dump({"token": token}, f, ensure_ascii=False, indent=2)
+                json.dump({"token": token, "username": self.username}, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
 
@@ -917,9 +946,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             pass
 
     def _attempt_token_login(self):
-        token = self._load_saved_token()
+        token, saved_username = self._load_saved_token()
         if not token:
             return
+        if saved_username:
+            self.username = saved_username
         self.status_label.setText("Автовход...")
         self.connect_btn.setEnabled(False)
         self.auth_worker = AuthWorker(
@@ -947,6 +978,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if token:
                 self._save_token(token)
 
+            resp_username = (resp.get("username") or "").strip()
+            if resp_username:
+                self.username = resp_username
+
             self.client_socket = sock
             self.prebuffer = rest
             self.running = True
@@ -955,6 +990,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.sender_thread = SenderThread(self.client_socket)
             self.sender_thread.error.connect(lambda _err: None)
             self.sender_thread.start()
+            self._request_profile(self.username)
 
             self.receiver_thread = ReceiverThread(self.client_socket, self.prebuffer)
             self.receiver_thread.message_received.connect(self.display_message)
@@ -1119,6 +1155,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 self.connect_btn.setEnabled(False)
                 return
 
+            resp_username = (resp.get("username") or "").strip()
+            if resp_username:
+                self.username = resp_username
+
             self.client_socket = sock
             self.prebuffer = rest_or_status
             self.running = True
@@ -1127,6 +1167,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.sender_thread = SenderThread(self.client_socket)
             self.sender_thread.error.connect(lambda _err: None)
             self.sender_thread.start()
+            self._request_profile(self.username)
 
             self.receiver_thread = ReceiverThread(self.client_socket, self.prebuffer)
             self.receiver_thread.message_received.connect(self.display_message)
@@ -1367,6 +1408,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 if isinstance(item, dict):
                     self.display_message(item)
             return
+        if data.get("type") == "session":
+            username = (data.get("username") or "").strip()
+            if username and username != self.username:
+                self.username = username
+                self._update_user_label()
+                if self.chat_mode == "group" or self.chat_mode == "dm":
+                    self._render_conversation()
+            return
         if data.get("type") == "dm_history":
             items = data.get("items", [])
             for item in items:
@@ -1382,8 +1431,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if data.get("type") == "dm_receipt":
             self._apply_receipt(data)
             return
-        if data.get("type") == "users":
-            self._update_users(data.get("users", []))
+        if data.get("type") == "contacts":
+            self._update_contacts(data.get("contacts", []))
+            return
+        if data.get("type") == "search_results":
+            self._apply_search_results(data)
             return
         if data.get("type") == "profile":
             username = (data.get("username") or "").strip()
@@ -1593,6 +1645,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         profile_action.triggered.connect(lambda: self.show_profile(username))
         menu.addAction(profile_action)
 
+        in_contacts = {item.get("username") for item in self.contact_items if item.get("username")}
+        remove_action = QtWidgets.QAction("Удалить из контактов", self)
+        remove_action.setEnabled(username != self.username and username in in_contacts)
+        remove_action.triggered.connect(lambda: self._remove_contact(username))
+        menu.addAction(remove_action)
+
         menu.exec_(self.users_list.mapToGlobal(pos))
 
     def show_profile(self, username):
@@ -1738,7 +1796,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             item["read"] = True
             self._send_read_receipt(msg_id)
 
-    def _update_users(self, users):
+    def _update_contacts(self, users):
         items = []
         for u in users:
             if isinstance(u, dict):
@@ -1766,13 +1824,100 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         items.sort(key=lambda x: (not x["active"], self._display_name(x["username"]).casefold()))
 
-        self.latest_users = items
-        self._render_users_list()
+        self.contact_items = items
+        existing = {item.get("username") for item in self.contact_items if item.get("username")}
+        if existing:
+            self.pending_contact_adds -= existing
+        if not self.search_query:
+            self.latest_users = list(self.contact_items)
+            self._render_users_list()
         self._update_user_label()
+        self._save_avatar_cache()
+
+    def _on_search_text_changed(self, text):
+        self.search_query = (text or "").strip()
+        if not self.search_query:
+            self.search_items = []
+            self.latest_users = list(self.contact_items)
+            self.users_title.setText("Контакты")
+            self._render_users_list()
+            return
+        self.users_title.setText("Поиск")
+        self.search_timer.start()
+
+    def _send_search_request(self):
+        query = self.search_query
+        if not query:
+            return
+        self._send_action({"action": "search_users", "query": query})
+
+    def _add_contact(self, username):
+        if not username or username == self.username:
+            return
+        if username in self.pending_contact_adds:
+            return
+        self.pending_contact_adds.add(username)
+        if self.search_query:
+            self._render_users_list()
+        self._send_action({"action": "add_contact", "username": username})
+
+    def _remove_contact(self, username):
+        if not username or username == self.username:
+            return
+        if username in self.pending_contact_adds:
+            self.pending_contact_adds.discard(username)
+        if self.search_query:
+            self._render_users_list()
+        self._send_action({"action": "remove_contact", "username": username})
+
+    def _apply_search_results(self, data):
+        query = (data.get("query") or "").strip()
+        if not query or query != self.search_query:
+            return
+        results = data.get("results", [])
+        items = []
+        for u in results:
+            if isinstance(u, dict):
+                name = (u.get("username", "") or "").strip()
+                active = bool(u.get("active"))
+                nick = u.get("nick", "")
+                avatar = u.get("avatar", "")
+            else:
+                name = str(u).strip()
+                active = False
+                nick = ""
+                avatar = ""
+            if not name or name == self.username:
+                continue
+            cached = self.avatar_cache.get(name, "")
+            if not avatar and cached:
+                avatar = cached
+            self.user_directory[name] = {
+                "nick": nick,
+                "avatar": avatar
+            }
+            if avatar:
+                self.avatar_cache[name] = avatar
+            items.append({"username": name, "active": active})
+        items.sort(key=lambda x: (not x["active"], self._display_name(x["username"]).casefold()))
+        self.search_items = items
+        if self.search_query:
+            self.latest_users = list(self.search_items)
+            self._render_users_list()
         self._save_avatar_cache()
 
     def _render_users_list(self):
         self.users_list.clear()
+        is_search = bool(self.search_query)
+        in_contacts = {item.get("username") for item in self.contact_items if item.get("username")}
+        if not self.latest_users:
+            if is_search:
+                self.empty_state_label.setText("Нет результатов поиска")
+            else:
+                self.empty_state_label.setText("Контактов пока нет")
+            self.empty_state_label.setVisible(True)
+        else:
+            self.empty_state_label.setVisible(False)
         for entry in self.latest_users:
             name = entry.get("username")
             active = bool(entry.get("active"))
@@ -1780,7 +1925,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 continue
             item = QtWidgets.QListWidgetItem()
             item.setData(QtCore.Qt.UserRole, name)
-            item.setSizeHint(QtCore.QSize(0, 36))
+            item.setSizeHint(QtCore.QSize(0, 36 if not is_search else 40))
             self.users_list.addItem(item)
 
             row = QtWidgets.QWidget(self.users_list)
@@ -1830,6 +1975,22 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             badge.setAlignment(QtCore.Qt.AlignCenter)
             badge.setVisible(count > 0)
             row_layout.addWidget(badge, 0, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+
+            if is_search:
+                if name in in_contacts:
+                    added = QtWidgets.QLabel("Добавлено")
+                    added.setObjectName("mutedLabel")
+                    row_layout.addWidget(added, 0, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+                else:
+                    add_btn = QtWidgets.QPushButton("Добавить")
+                    add_btn.setObjectName("ghostButton")
+                    add_btn.setFixedHeight(24)
+                    is_pending = name in self.pending_contact_adds
+                    if is_pending:
+                        add_btn.setText("Добавлено")
+                        add_btn.setEnabled(False)
+                    add_btn.clicked.connect(lambda _=None, u=name: self._add_contact(u))
+                    row_layout.addWidget(add_btn, 0, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
 
             self.users_list.setItemWidget(item, row)
         self._sync_user_selection(self.users_list.currentItem(), None)

@@ -12,7 +12,7 @@ from datetime import datetime
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(BASE_DIR)
 
-from mailSystem.mailCla import MailSender, CodeGenerator
+from mailSystem.mailCla import MailSender, CodeGenerator, is_console_email
 
 
 class MAXutkoServer:
@@ -50,6 +50,10 @@ class MAXutkoServer:
         self.dm_history_lock = threading.Lock()
         self.dm_history_limit = 20000
         self.dm_history = self.load_dm_history()
+
+        self.contacts_path = os.path.join(os.path.dirname(__file__), "contacts.json")
+        self.contacts_lock = threading.Lock()
+        self.contacts = self.load_contacts()
 
         self.receipts_path = os.path.join(os.path.dirname(__file__), "dm_receipts.json")
         self.receipts_lock = threading.Lock()
@@ -210,7 +214,7 @@ class MAXutkoServer:
         return False
 
 
-    def send_auth(self, client, status, message="", token=""):
+    def send_auth(self, client, status, message="", token="", username=""):
 
         data = {
             "type": "auth",
@@ -219,6 +223,8 @@ class MAXutkoServer:
         }
         if token:
             data["token"] = token
+        if username:
+            data["username"] = username
 
         client.send((json.dumps(data) + "\n").encode())
 
@@ -336,6 +342,134 @@ class MAXutkoServer:
             pass
 
         return []
+
+    # ================= CONTACTS =================
+
+    def load_contacts(self):
+        if not os.path.exists(self.contacts_path):
+            contacts = {}
+            # Auto-create contacts from DM history on first run
+            try:
+                with self.dm_history_lock:
+                    items = list(self.dm_history)
+            except Exception:
+                items = []
+            for msg in items:
+                if not isinstance(msg, dict):
+                    continue
+                if msg.get("type") != "dm":
+                    continue
+                a = (msg.get("username") or "").strip()
+                b = (msg.get("to") or "").strip()
+                if not a or not b or a == b:
+                    continue
+                contacts.setdefault(a, [])
+                contacts.setdefault(b, [])
+                if b not in contacts[a]:
+                    contacts[a].append(b)
+                if a not in contacts[b]:
+                    contacts[b].append(a)
+            if contacts:
+                self.contacts = contacts
+                self.save_contacts()
+            return contacts
+        try:
+            with open(self.contacts_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                cleaned = {}
+                for name, items in data.items():
+                    if not isinstance(name, str):
+                        continue
+                    if isinstance(items, list):
+                        cleaned[name] = [str(x) for x in items if str(x)]
+                return cleaned
+        except:
+            pass
+        return {}
+
+    def save_contacts(self):
+        with open(self.contacts_path, "w", encoding="utf-8") as f:
+            json.dump(self.contacts, f, ensure_ascii=False, indent=2)
+
+    def _user_exists(self, username):
+        if not username:
+            return False
+        with self.accounts_lock:
+            if username in self.accounts:
+                return True
+        with self.clients_lock:
+            return username in self.clients.values()
+
+    def _add_contact_pair(self, user_a, user_b):
+        if not user_a or not user_b or user_a == user_b:
+            return
+        if not self._user_exists(user_b):
+            return
+        with self.contacts_lock:
+            a_list = self.contacts.setdefault(user_a, [])
+            b_list = self.contacts.setdefault(user_b, [])
+            if user_b not in a_list:
+                a_list.append(user_b)
+            if user_a not in b_list:
+                b_list.append(user_a)
+            self.contacts[user_a] = a_list
+            self.contacts[user_b] = b_list
+            self.save_contacts()
+
+    def _remove_contact_pair(self, user_a, user_b):
+        if not user_a or not user_b or user_a == user_b:
+            return
+        with self.contacts_lock:
+            a_list = self.contacts.get(user_a, [])
+            b_list = self.contacts.get(user_b, [])
+            if user_b in a_list:
+                a_list = [x for x in a_list if x != user_b]
+                self.contacts[user_a] = a_list
+            if user_a in b_list:
+                b_list = [x for x in b_list if x != user_a]
+                self.contacts[user_b] = b_list
+            self.save_contacts()
+
+    def _build_contacts_payload(self, username):
+        with self.contacts_lock:
+            contacts = list(self.contacts.get(username, []))
+
+        with self.accounts_lock:
+            profiles = {
+                name: dict((acc.get("profile") or {}))
+                for name, acc in self.accounts.items()
+            }
+
+        with self.clients_lock:
+            active_users = set(self.clients.values())
+
+        items = []
+        for name in contacts:
+            profile = profiles.get(name, {})
+            items.append({
+                "username": name,
+                "active": name in active_users,
+                "nick": profile.get("nick", "")
+            })
+
+        return {
+            "type": "contacts",
+            "contacts": items
+        }
+
+    def send_contacts(self, target_client, username):
+        payload = self._build_contacts_payload(username)
+        try:
+            target_client.send((json.dumps(payload) + "\n").encode())
+        except:
+            pass
+
+    def send_all_contacts(self):
+        with self.clients_lock:
+            items = list(self.clients.items())
+        for sock, name in items:
+            self.send_contacts(sock, name)
 
 
     def save_dm_history(self):
@@ -534,6 +668,31 @@ class MAXutkoServer:
                 except:
                     pass
 
+    def _search_users(self, query, requester=""):
+        q = (query or "").strip().casefold()
+        if not q:
+            return []
+        with self.accounts_lock:
+            accounts = dict(self.accounts)
+        with self.clients_lock:
+            active_users = set(self.clients.values())
+
+        results = []
+        for name, acc in accounts.items():
+            if requester and name == requester:
+                continue
+            profile = acc.get("profile") or {}
+            nick = (profile.get("nick") or "").strip()
+            if q in name.casefold() or (nick and q in nick.casefold()):
+                results.append({
+                    "username": name,
+                    "active": name in active_users,
+                    "nick": nick
+                })
+
+        results.sort(key=lambda x: (not x.get("active"), x.get("nick", "").casefold(), x.get("username", "").casefold()))
+        return results[:50]
+
 
     # ================= START =================
 
@@ -622,7 +781,7 @@ class MAXutkoServer:
 
             if action == "register":
 
-                if not email or not self.email_re.fullmatch(email):
+                if not email or (not is_console_email(email) and not self.email_re.fullmatch(email)):
                     self.send_auth(client, "error", "Invalid email")
                     client.close()
                     return
@@ -718,7 +877,7 @@ class MAXutkoServer:
 
             elif action == "reset_request":
 
-                if not email or not self.email_re.fullmatch(email):
+                if not email or (not is_console_email(email) and not self.email_re.fullmatch(email)):
                     self.send_auth(client, "error", "Invalid email")
                     client.close()
                     return
@@ -858,17 +1017,26 @@ class MAXutkoServer:
                 self.clients[client] = username
 
             token_value = self._issue_token(username)
-            self.send_auth(client, "ok", token=token_value)
+            self.send_auth(client, "ok", token=token_value, username=username)
 
             print(f"[+] {username} logged in")
+
+            try:
+                session_payload = {
+                    "type": "session",
+                    "username": username
+                }
+                client.send((json.dumps(session_payload) + "\n").encode())
+            except:
+                pass
 
             self.send_history(client)
             self.send_dm_history(client, username)
             self.send_pending_receipts(client, username)
-            self.send_user_list(client)
+            self.send_contacts(client, username)
 
             self.send_system(f"{username} joined the chat")
-            self.send_user_list()
+            self.send_all_contacts()
 
             # ---- MAIN LOOP ----
 
@@ -934,7 +1102,42 @@ class MAXutkoServer:
                                     acc["profile"] = profile
                                     self.accounts[username] = acc
                                     self.save_accounts()
-                            self.send_user_list()
+                            self.send_all_contacts()
+                            continue
+                        if action == "search_users":
+                            query = (msg.get("query") or "").strip()
+                            results = self._search_users(query, requester=username)
+                            payload = {
+                                "type": "search_results",
+                                "query": query,
+                                "results": results
+                            }
+                            try:
+                                client.send((json.dumps(payload) + "\n").encode())
+                            except:
+                                pass
+                            continue
+                        if action == "add_contact":
+                            target = (msg.get("username") or "").strip()
+                            if target and target != username:
+                                self._add_contact_pair(username, target)
+                                sender_sock = self._socket_by_username(username)
+                                target_sock = self._socket_by_username(target)
+                                if sender_sock:
+                                    self.send_contacts(sender_sock, username)
+                                if target_sock:
+                                    self.send_contacts(target_sock, target)
+                            continue
+                        if action == "remove_contact":
+                            target = (msg.get("username") or "").strip()
+                            if target and target != username:
+                                self._remove_contact_pair(username, target)
+                                sender_sock = self._socket_by_username(username)
+                                target_sock = self._socket_by_username(target)
+                                if sender_sock:
+                                    self.send_contacts(sender_sock, username)
+                                if target_sock:
+                                    self.send_contacts(target_sock, target)
                             continue
                         if action == "get_note":
                             target = (msg.get("username") or "").strip()
@@ -1012,6 +1215,14 @@ class MAXutkoServer:
 
     def send_direct_message(self, sender, target, text):
 
+        self._add_contact_pair(sender, target)
+        sender_sock = self._socket_by_username(sender)
+        target_sock = self._socket_by_username(target)
+        if sender_sock:
+            self.send_contacts(sender_sock, sender)
+        if target_sock:
+            self.send_contacts(target_sock, target)
+
         msg_id = secrets.token_hex(12)
         delivered = self._socket_by_username(target) is not None
         data = {
@@ -1028,9 +1239,6 @@ class MAXutkoServer:
         self.append_dm_history(dict(data))
 
         raw = (json.dumps(data) + "\n").encode()
-
-        target_sock = self._socket_by_username(target)
-        sender_sock = self._socket_by_username(sender)
 
         if target_sock:
             try:
@@ -1110,7 +1318,7 @@ class MAXutkoServer:
         print(f"[-] {username} disconnected")
 
         self.send_system(f"{username} left the chat")
-        self.send_user_list()
+        self.send_all_contacts()
 
 
 # ================= MAIN =================
