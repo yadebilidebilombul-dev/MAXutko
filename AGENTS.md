@@ -32,3 +32,35 @@ Instructions for Codex when working in this repo.
 ## Questions To Ask When Unclear
 - Desired behavior and edge cases.
 - OS-specific expectations (Windows path handling, file opening).
+
+## UI Style Summary (app/ui.qss)
+
+- **Color palette:**
+	- Background: `#f3f4f6` (light gray)
+	- Primary text: `#111827`
+	- Muted text: `#6b7280`
+	- Primary action: `#2563eb` (blue)
+	- Accent / hover: `#1d4ed8`
+	- Danger: `#ef4444` (hover `#dc2626`)
+	- Borders: `#d1d5db` / `#e5e7eb`
+
+- **Corner radii conventions:**
+	- Buttons: ~10px (primary/ghost/danger)
+	- Slightly larger elements (panels, reply blocks): ~12px
+	- Cards / modals: 14–16px
+
+- **Typography / spacing:**
+	- Font: `Segoe UI`, default ~10pt
+	- Buttons use bold / semi-bold for emphasis in dialogs
+	- Padding is moderate (6–18px) depending on button size
+
+- **Selectors & conventions:**
+	- Styles target object names (ID selectors), e.g. `QPushButton#primaryButton`.
+	- New UI elements should use existing object-name patterns and QSS IDs to match theme.
+	- Use existing classes: `primaryButton`, `ghostButton`, `dangerButton` or add `deleteDialogButton`-style IDs when needed.
+
+- **Design guidance:**
+	- Prefer soft rounded corners and consistent padding.
+	- Use `border` + `border-radius` together to ensure consistent rendering on Windows.
+	- For modals use `OverlayController` and keep modal sizes aligned with other overlays.
+

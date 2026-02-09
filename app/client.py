@@ -13,12 +13,19 @@ import getpass
 from PyQt5 import QtCore, QtWidgets, QtGui
 from overlay_utils import OverlayController
 from notifications import WindowsNotifier, PopupNotifier
+from PyQt5.QtGui import QIcon
 
 SERVER_HOST = "26.202.145.247"
 SERVER_PORT = 5555
 CLANS = ["Одмен", "Новичок", "Старик", "Старейшина", "Модер"]
 CLAN_PRIMARY = {"Одмен", "Модер"}
 CLAN_SECONDARY = {"Старейшина", "Новичок", "Старик"}
+
+
+def resource_path(relative):
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative)
+    return os.path.join(os.path.abspath("."), relative)
 
 
 class AuthWorker(QtCore.QThread):
@@ -593,14 +600,61 @@ class ProfileDialog(QtWidgets.QDialog):
         return "secondary"
 
 
+class CreateGroupWidget(QtWidgets.QWidget):
+    """Content widget for creating a group - used with OverlayController"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        title = QtWidgets.QLabel("Создание группы")
+        title.setObjectName("modalTitle")
+        title_font = title.font()
+        title_font.setPixelSize(14)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        label = QtWidgets.QLabel("Введите название")
+        label.setObjectName("mutedLabel")
+        layout.addWidget(label)
+
+        self.name_input = QtWidgets.QLineEdit()
+        self.name_input.setPlaceholderText("Название группы")
+        self.name_input.setObjectName("input")
+        layout.addWidget(self.name_input)
+
+        self.private_checkbox = QtWidgets.QCheckBox("Сделать приватной?")
+        layout.addWidget(self.private_checkbox)
+
+        layout.addStretch(1)
+
+        btns = QtWidgets.QHBoxLayout()
+        btns.addStretch(1)
+        self.create_btn = QtWidgets.QPushButton("Создать")
+        self.create_btn.setObjectName("primaryButton")
+        btns.addWidget(self.create_btn)
+        layout.addLayout(btns)
+
+    def group_name(self):
+        return (self.name_input.text() or "").strip()
+
+    def is_private(self):
+        return bool(self.private_checkbox.isChecked())
+
+
 class MAXutkoClient(QtWidgets.QMainWindow):
 
-    def __init__(self):
+    def __init__(self): 
         super().__init__()
 
         self.setWindowTitle("MAXutko Messenger")
         self.resize(900, 700)
         self.setMinimumSize(900, 700)
+        icon_path = resource_path("app/icon.ico")  # или .png
+        self.setWindowIcon(QIcon(icon_path))   
+
 
         # Socket
         self.client_socket = None
@@ -624,6 +678,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self._passcode_verified_mode = ""
         self.chat_mode = "group"
         self.dm_target = None
+        self.group_chat_target = None
         self.conversations = {"group": []}
         self.message_index = {}
         self.unread_counts = {}
@@ -632,6 +687,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.search_query = ""
         self.latest_users = []
         self.user_directory = {}
+        self.groups = {}
         self.my_clan_primary = ""
         self.my_clan_secondary = ""
         self.clans = list(CLANS)
@@ -662,6 +718,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.downloaded_files = {}
         self.file_button_refs = {}
         self.downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        self._pending_delete_msg_id = None
 
         self.setup_ui()
         self.show_login_screen()
@@ -715,7 +772,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def _build_login_page(self):
         root_layout = QtWidgets.QVBoxLayout(self.login_page)
-        root_layout.setAlignment(QtCore.Qt.AlignCenter)
+        root_layout.setContentsMargins(0, 0, 0, 0)
 
         self.login_content = QtWidgets.QWidget()
         content_layout = QtWidgets.QVBoxLayout(self.login_content)
@@ -828,7 +885,19 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         card_layout.addWidget(self.code_row)
 
         content_layout.addWidget(card, 0, QtCore.Qt.AlignCenter)
-        root_layout.addWidget(self.login_content, 0, QtCore.Qt.AlignCenter)
+        root_layout.addStretch(1)
+        root_layout.addWidget(self.login_content, 0, QtCore.Qt.AlignHCenter)
+        root_layout.addStretch(1)
+
+        build_row = QtWidgets.QWidget()
+        build_layout = QtWidgets.QHBoxLayout(build_row)
+        build_layout.setContentsMargins(0, 0, 0, 0)
+        build_layout.setSpacing(0)
+        build_label = QtWidgets.QLabel("Build 2.0.2")
+        build_label.setObjectName("mutedLabel")
+        build_layout.addWidget(build_label, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignBottom)
+        build_layout.addStretch(1)
+        root_layout.addWidget(build_row, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignBottom)
 
         self.email_row.setVisible(False)
         self.code_row.setVisible(False)
@@ -1131,7 +1200,19 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.users_search.setPlaceholderText("Поиск по никнейму")
         self.users_search.setObjectName("input")
         self.users_search.textChanged.connect(self._on_search_text_changed)
-        users_layout.addWidget(self.users_search)
+        # search + create-group button
+        search_row = QtWidgets.QWidget()
+        search_row_layout = QtWidgets.QHBoxLayout(search_row)
+        search_row_layout.setContentsMargins(0, 0, 0, 0)
+        search_row_layout.setSpacing(6)
+        search_row_layout.addWidget(self.users_search)
+        self.create_group_btn = QtWidgets.QPushButton("+")
+        self.create_group_btn.setFixedSize(28, 28)
+        self.create_group_btn.setObjectName("ghostButton")
+        self.create_group_btn.setToolTip("Создать группу")
+        self.create_group_btn.clicked.connect(self._show_create_group_dialog)
+        search_row_layout.addWidget(self.create_group_btn)
+        users_layout.addWidget(search_row)
 
         self.empty_state_label = QtWidgets.QLabel("")
         self.empty_state_label.setObjectName("mutedLabel")
@@ -1250,8 +1331,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.chat_content,
             modal_size=QtCore.QSize(440, 520)
         )
+        self.delete_confirmation_overlay = OverlayController(
+            self.chat_page,
+            self.chat_content,
+            modal_size=QtCore.QSize(350, 210)
+        )
         self._build_settings_overlay()
         self._build_passcode_overlay()
+        self._build_delete_confirmation_overlay()
         self._init_notifications()
 
     def _labeled(self, text, widget):
@@ -1521,6 +1608,66 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         self.passcode_overlay.set_content(panel)
 
+    def _build_delete_confirmation_overlay(self):
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+
+        title = QtWidgets.QLabel("Удалить сообщение")
+        title_font = QtGui.QFont("Segoe UI", 13, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        title.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(title)
+
+        message = QtWidgets.QLabel("Вы уверены? Это действие необратимо.")
+        message.setWordWrap(True)
+        message.setAlignment(QtCore.Qt.AlignCenter)
+        message.setObjectName("mutedLabel")
+        layout.addWidget(message)
+
+        layout.addStretch(1)
+
+        buttons_layout = QtWidgets.QHBoxLayout()
+        buttons_layout.setSpacing(10)
+
+        cancel_btn = QtWidgets.QPushButton("Отмена")
+        cancel_btn.setObjectName("deleteDialogButton")
+        cancel_btn.clicked.connect(self._close_delete_confirmation)
+        buttons_layout.addWidget(cancel_btn)
+
+        delete_btn = QtWidgets.QPushButton("Удалить")
+        delete_btn.setObjectName("deleteDialogDangerButton")
+        delete_btn.clicked.connect(self._confirm_delete_message)
+        buttons_layout.addWidget(delete_btn)
+
+        layout.addLayout(buttons_layout)
+
+        self.delete_confirmation_overlay.set_content(panel)
+
+    def _show_delete_confirmation(self):
+        if not getattr(self, "delete_confirmation_overlay", None):
+            return
+        self.delete_confirmation_overlay.show()
+
+    def _close_delete_confirmation(self):
+        if not getattr(self, "delete_confirmation_overlay", None):
+            return
+        self._pending_delete_msg_id = None
+        self.delete_confirmation_overlay.hide()
+
+    def _confirm_delete_message(self):
+        msg_id = self._pending_delete_msg_id
+        self._pending_delete_msg_id = None
+        if getattr(self, "delete_confirmation_overlay", None):
+            self.delete_confirmation_overlay.hide()
+        
+        if not msg_id:
+            return
+        
+        payload = {"delete_message": msg_id}
+        self._send_action(payload)
+
     def _show_passcode_overlay(self):
         if not getattr(self, "passcode_overlay", None):
             return
@@ -1529,6 +1676,22 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self._open_passcode_home()
         self.passcode_overlay.show()
         self._request_passcode_status()
+
+    def _show_create_group_dialog(self):
+        content = CreateGroupWidget(self)
+        overlay = OverlayController(self, content, modal_size=QtCore.QSize(340, 220))
+        
+        def on_create():
+            name = content.group_name()
+            private = content.is_private()
+            if not name:
+                QtWidgets.QMessageBox.warning(self, "Ошибка", "Введите название группы")
+                return
+            overlay.hide()
+            self._send_action({"action": "create_group", "name": name, "private": private})
+        
+        content.create_btn.clicked.connect(on_create)
+        overlay.show()
 
     def _close_passcode_overlay(self):
         if getattr(self, "passcode_overlay", None):
@@ -2717,7 +2880,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 payload["reply_to"] = self.reply_to_id
             if self.chat_mode == "dm" and self.dm_target:
                 payload["to"] = self.dm_target
-            data = json.dumps(payload) + "\n"
+            elif self.chat_mode == "group_chat" and self.group_chat_target:
+                payload["action"] = "send_group_message"
+                payload["group_id"] = self.group_chat_target
             self._send_action(payload)
             self.message_input.clear()
             self._clear_reply()
@@ -3101,6 +3266,15 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _start_reply(self, data):
         if not isinstance(data, dict):
             return
+
+    def _handle_message_deleted(self, msg_id):
+        items = self.conversations.get(self.chat_mode, [])
+        items[:] = [m for m in items if m.get("id") != msg_id]
+        self._render_conversation()
+
+    def _start_reply(self, data):
+        if not isinstance(data, dict):
+            return
         msg_id = data.get("id")
         if not msg_id:
             return
@@ -3161,6 +3335,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         reply_action.setEnabled(bool(data.get("id")))
         reply_action.triggered.connect(lambda _=None, d=data: self._start_reply(d))
         menu.addAction(reply_action)
+        
+        delete_action = QtWidgets.QAction("Удалить", self)
+        delete_action.setEnabled(bool(data.get("id") and data.get("username") == self.username))
+        delete_action.triggered.connect(lambda _=None, d=data: self._delete_message(d))
+        menu.addAction(delete_action)
+        
         menu.exec_(widget.mapToGlobal(pos))
 
     def _bind_message_actions(self, widget, data):
@@ -3174,6 +3354,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 self._start_reply(d)
 
         widget.mouseDoubleClickEvent = _on_double_click
+
+    def _delete_message(self, data):
+        msg_id = data.get("id")
+        if not msg_id or data.get("username") != self.username:
+            return
+        
+        self._pending_delete_msg_id = msg_id
+        self._show_delete_confirmation()
 
     # ================= DISPLAY =================
 
@@ -3215,6 +3403,60 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return
         if data.get("type") == "search_results":
             self._apply_search_results(data)
+            return
+        if data.get("type") == "group_invite":
+            frm = (data.get("from") or "").strip()
+            grp = data.get("group") or {}
+            gname = grp.get("name", "")
+            gid = grp.get("id", "")
+            if gid:
+                btn = QtWidgets.QMessageBox(self)
+                btn.setWindowTitle("Приглашение в группу")
+                btn.setText(f"Пользователь {frm} приглашает вас в группу '{gname}'")
+                join = btn.addButton("Принять", QtWidgets.QMessageBox.AcceptRole)
+                btn.addButton("Отклонить", QtWidgets.QMessageBox.RejectRole)
+                btn.exec_()
+                if btn.clickedButton() == join:
+                    self._send_action({"action": "accept_group_invite", "group_id": gid})
+            return
+        if data.get("type") == "group_created":
+            status = (data.get("status") or "").strip()
+            grp = data.get("group") or {}
+            gid = (grp.get("id") or "").strip()
+            if status == "ok" and gid:
+                self.groups[gid] = grp
+                # Add to contacts
+                self._add_group_to_contacts(gid, grp)
+                QtWidgets.QMessageBox.information(self, "Группа создана", f"Группа '{grp.get('name','')}' создана")
+            else:
+                QtWidgets.QMessageBox.warning(self, "Ошибка", data.get("message", "Ошибка при создании группы"))
+            return
+        if data.get("type") == "group_joined":
+            status = (data.get("status") or "").strip()
+            grp = data.get("group") or {}
+            gid = (grp.get("id") or "").strip()
+            if status == "ok" and gid:
+                # remember membership
+                self.groups[gid] = grp
+                # Add to contacts
+                self._add_group_to_contacts(gid, grp)
+                QtWidgets.QMessageBox.information(self, "Вступление", f"Вы вступили в группу '{grp.get('name','')}'")
+            else:
+                QtWidgets.QMessageBox.warning(self, "Ошибка", data.get("message", "Не удалось вступить в группу"))
+            return
+        if data.get("type") == "group_member_added":
+            grp = data.get("group") or {}
+            user = (data.get("username") or "").strip()
+            if grp and user:
+                # Update local group data
+                gid = grp.get("id")
+                if gid:
+                    self.groups[gid] = grp
+            return
+        if data.get("type") == "group_message":
+            self._store_message(data)
+            if self.chat_mode == "group_chat" and self.group_chat_target == data.get("group_id"):
+                self._render_conversation()
             return
         if data.get("type") == "profile":
             username = (data.get("username") or "").strip()
@@ -3272,6 +3514,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if data.get("type") == "file_error":
             self._fail_download((data.get("file_id") or "").strip(), data.get("message", "Ошибка загрузки"))
             return
+        if data.get("type") == "message_deleted":
+            msg_id = (data.get("id") or "").strip()
+            if msg_id:
+                self._handle_message_deleted(msg_id)
+            return
         self._store_message(data)
         is_dm_item = data.get("type") in ("dm", "file") and data.get("to")
         notified = False
@@ -3317,7 +3564,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             is_dm = tp == "dm" or (tp == "file" and data.get("to"))
             time_text = self._format_timestamp_hm(time)
             display_name = self._display_name(user)
-            show_author = self.chat_mode == "group"
+            show_author = self.chat_mode in ("group", "group_chat")
             reply_info = self._reply_preview_info(data)
             if reply_info:
                 reply_frame = QtWidgets.QFrame()
@@ -3484,6 +3731,22 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if msg_id:
                 self.message_index[msg_id] = msg_copy
             return
+        if tp == "group_message":
+            msg_id = data.get("id")
+            gid = (data.get("group_id") or "").strip()
+            if not gid:
+                return
+            if msg_id:
+                existing = self.message_index.get(msg_id)
+                if existing:
+                    existing.update(data)
+                    return
+            key = f"group:{gid}"
+            msg_copy = dict(data)
+            self.conversations.setdefault(key, []).append(msg_copy)
+            if msg_id:
+                self.message_index[msg_id] = msg_copy
+            return
         msg_id = data.get("id")
         self.conversations["group"].append(data)
         if msg_id:
@@ -3495,27 +3758,40 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if self.chat_mode != "dm" or not self.dm_target:
                 return False
             return self._conversation_key_for_dm(data) == f"dm:{self.dm_target}"
+        if tp == "group_message":
+            if self.chat_mode != "group_chat" or not self.group_chat_target:
+                return False
+            return data.get("group_id") == self.group_chat_target
         return self.chat_mode == "group"
 
     def _render_conversation(self):
         self._clear_messages()
         if self.chat_mode == "group":
             items = self.conversations.get("group", [])
+        elif self.chat_mode == "group_chat" and self.group_chat_target:
+            items = self.conversations.get(f"group:{self.group_chat_target}", [])
         else:
             items = self.conversations.get(f"dm:{self.dm_target}", [])
         for item in items:
             self._render_message(item)
 
-    def set_chat_mode(self, mode, target=None):
-        if mode not in ("group", "dm"):
+    def set_chat_mode(self, mode, target=None, group_id=None):
+        if mode not in ("group", "dm", "group_chat"):
             return
         self._clear_reply()
         self.chat_mode = mode
         self.dm_target = target if mode == "dm" else None
+        self.group_chat_target = group_id if mode == "group_chat" else None
         if mode == "group":
             self.chat_label.setText("Общий чат")
             self.back_btn.setVisible(False)
             self.users_list.clearSelection()
+        elif mode == "group_chat":
+            grp = self.groups.get(group_id, {})
+            gname = (grp.get("name") or "").strip()
+            self.chat_label.setText(f"Группа: {gname}")
+            self.back_btn.setVisible(True)
+            self._select_user_in_list(None)
         else:
             display = self._display_name(self.dm_target)
             if display and display != self.dm_target:
@@ -3532,7 +3808,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def open_direct_chat(self, item):
         if not item:
             return
-        target = (item.data(QtCore.Qt.UserRole) or "").strip()
+        data = item.data(QtCore.Qt.UserRole)
+        # Check if it's a group
+        if isinstance(data, dict) and data.get("group_id"):
+            gid = data.get("group_id")
+            self.set_chat_mode("group_chat", group_id=gid)
+            return
+        # Regular user
+        target = (data or "").strip()
         if not target or target == self.username:
             return
         self.set_chat_mode("dm", target)
@@ -3545,7 +3828,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if not item:
             return
         self.users_list.setCurrentItem(item)
-        username = (item.data(QtCore.Qt.UserRole) or "").strip()
+        data = item.data(QtCore.Qt.UserRole)
+        # ignore group entries in this menu
+        if isinstance(data, dict) and data.get("group_id"):
+            return
+        username = (data or "").strip()
         if not username:
             return
 
@@ -3565,6 +3852,23 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         remove_action.setEnabled(username != self.username and username in in_contacts)
         remove_action.triggered.connect(lambda: self._remove_contact(username))
         menu.addAction(remove_action)
+
+        # Invite to group submenu (groups where current user is a member)
+        try:
+            my_groups = [g for g in self.groups.values() if self.username in (g.get("members") or [])]
+        except Exception:
+            my_groups = []
+        if my_groups:
+            invite_menu = QtWidgets.QMenu("Пригласить в группу", self)
+            for g in my_groups:
+                gid = g.get("id")
+                gname = g.get("name")
+                if not gid:
+                    continue
+                act = QtWidgets.QAction(gname or gid, self)
+                act.triggered.connect(lambda _=None, _gid=gid, _u=username: self._send_action({"action": "invite_group", "group_id": _gid, "username": _u}))
+                invite_menu.addAction(act)
+            menu.addMenu(invite_menu)
 
         menu.exec_(self.users_list.mapToGlobal(pos))
 
@@ -3717,6 +4021,24 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             item["read"] = True
             self._send_read_receipt(msg_id)
 
+    def _add_group_to_contacts(self, gid, grp):
+        """Add a group to the contacts list"""
+        if not gid:
+            return
+        gname = (grp.get("name") or "").strip()
+        if not gname:
+            return
+        # Check if already in contacts
+        existing = [item for item in self.contact_items if item.get("group_id") == gid]
+        if existing:
+            return
+        # Add to contacts list
+        self.contact_items.append({"group_id": gid, "group_name": gname, "is_group": True})
+        # Refresh display
+        if not self.search_query:
+            self.latest_users = list(self.contact_items)
+            self._render_users_list()
+
     def _update_contacts(self, users):
         items = []
         for u in users:
@@ -3743,7 +4065,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 self.avatar_cache[name] = avatar
             items.append({"username": name, "active": active})
 
-        items.sort(key=lambda x: (not x["active"], self._display_name(x["username"]).casefold()))
+        # Add user's groups to contacts
+        for gid, grp in self.groups.items():
+            gname = (grp.get("name") or "").strip()
+            if gname:
+                items.append({"group_id": gid, "group_name": gname, "is_group": True})
+
+        def _srk(x):
+            if x.get("is_group"):
+                return (True, (x.get("group_name") or "").casefold())
+            return (not bool(x.get("active")), self._display_name(x.get("username") or "").casefold())
+        items.sort(key=_srk)
 
         self.contact_items = items
         existing = {item.get("username") for item in self.contact_items if item.get("username")}
@@ -3796,6 +4128,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if not query or query != self.search_query:
             return
         results = data.get("results", [])
+        groups = data.get("groups", [])
         items = []
         for u in results:
             if isinstance(u, dict):
@@ -3820,7 +4153,22 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if avatar:
                 self.avatar_cache[name] = avatar
             items.append({"username": name, "active": active})
-        items.sort(key=lambda x: (not x["active"], self._display_name(x["username"]).casefold()))
+        # append groups (search-only results)
+        for g in groups:
+            try:
+                gid = (g.get("id") or "").strip()
+                gname = (g.get("name") or "").strip()
+                if not gid or not gname:
+                    continue
+                items.append({"group_id": gid, "group_name": gname, "is_group": True})
+            except Exception:
+                continue
+        # Sort mixed results (users and groups)
+        def _sort_key(x):
+            if x.get("is_group"):
+                return (True, (x.get("group_name") or "").casefold())
+            return (not bool(x.get("active")), self._display_name(x.get("username") or "").casefold())
+        items.sort(key=_sort_key)
         self.search_items = items
         if self.search_query:
             self.latest_users = list(self.search_items)
@@ -3840,6 +4188,39 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         else:
             self.empty_state_label.setVisible(False)
         for entry in self.latest_users:
+            if entry.get("is_group"):
+                gid = entry.get("group_id")
+                gname = entry.get("group_name")
+                row_height = 40 if is_search else 36
+                item = QtWidgets.QListWidgetItem()
+                item.setData(QtCore.Qt.UserRole, {"group_id": gid})
+                item.setSizeHint(QtCore.QSize(0, row_height))
+                self.users_list.addItem(item)
+
+                row = QtWidgets.QWidget(self.users_list)
+                row.setObjectName("groupRow")
+                row_layout = QtWidgets.QHBoxLayout(row)
+                row_layout.setContentsMargins(4, 4, 4, 4)
+                row_layout.setSpacing(6)
+                row_layout.setAlignment(QtCore.Qt.AlignVCenter)
+                row.setFixedHeight(row_height)
+
+                label = QtWidgets.QLabel(gname)
+                label.setObjectName("userName")
+                row_layout.addWidget(label, 1)
+
+                if is_search:
+                    join_btn = QtWidgets.QPushButton("Вступить")
+                    join_btn.setObjectName("ghostButton")
+                    join_btn.setFixedSize(80, 26)
+                    def _on_join(_gid=gid):
+                        self._send_action({"action": "join_group", "group_id": _gid})
+                    join_btn.clicked.connect(_on_join)
+                    row_layout.addWidget(join_btn)
+
+                self.users_list.setItemWidget(item, row)
+                continue
+
             name = entry.get("username")
             active = bool(entry.get("active"))
             if not name:
@@ -3919,15 +4300,20 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def _select_user_in_list(self, username):
         if not username:
+            # Clear selection if no username
+            self.users_list.clearSelection()
             return
         for i in range(self.users_list.count()):
             item = self.users_list.item(i)
             if not item:
                 continue
-            name = (item.data(QtCore.Qt.UserRole) or "").strip()
-            if name == username:
-                self.users_list.setCurrentItem(item)
-                return
+            data = item.data(QtCore.Qt.UserRole)
+            # Handle string usernames
+            if isinstance(data, str):
+                name = data.strip()
+                if name == username:
+                    self.users_list.setCurrentItem(item)
+                    return
 
     def _sync_user_selection(self, current, previous):
         for i in range(self.users_list.count()):

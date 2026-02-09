@@ -96,6 +96,11 @@ class MAXutkoServer:
         self.send_locks = {}
         self.send_locks_lock = threading.Lock()
 
+        # Groups
+        self.groups_path = os.path.join(os.path.dirname(__file__), "groups.json")
+        self.groups_lock = threading.Lock()
+        self.groups = self.load_groups()
+
 
     # ================= ACCOUNTS =================
 
@@ -300,6 +305,58 @@ class MAXutkoServer:
     def save_file_index(self):
         with open(self.file_index_path, "w", encoding="utf-8") as f:
             json.dump(self.file_index, f, ensure_ascii=False, indent=2)
+
+    def load_groups(self):
+        if not os.path.exists(self.groups_path):
+            return {}
+        try:
+            with open(self.groups_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                # basic validation
+                cleaned = {}
+                for gid, item in data.items():
+                    if not isinstance(item, dict):
+                        continue
+                    if not item.get("id"):
+                        item["id"] = gid
+                    item.setdefault("name", "")
+                    item.setdefault("owner", "")
+                    item.setdefault("private", False)
+                    item.setdefault("members", [])
+                    item.setdefault("invites", [])
+                    item.setdefault("created_at", int(time.time()))
+                    cleaned[gid] = item
+                return cleaned
+        except Exception:
+            pass
+        return {}
+
+    def save_groups(self):
+        with open(self.groups_path, "w", encoding="utf-8") as f:
+            json.dump(self.groups, f, ensure_ascii=False, indent=2)
+
+    def _search_groups(self, query):
+        q = (query or "").strip().casefold()
+        if not q:
+            return []
+        with self.groups_lock:
+            groups = dict(self.groups)
+        results = []
+        for gid, meta in groups.items():
+            if meta.get("private"):
+                continue
+            name = (meta.get("name") or "").strip()
+            if not name:
+                continue
+            if q in name.casefold():
+                results.append({
+                    "id": gid,
+                    "name": name,
+                    "members": len(list(meta.get("members") or []))
+                })
+        results.sort(key=lambda x: x.get("name", "").casefold())
+        return results[:50]
 
     def _sanitize_filename(self, name):
         base = os.path.basename(name or "").strip()
@@ -1569,12 +1626,143 @@ class MAXutkoServer:
                         if action == "search_users":
                             query = (msg.get("query") or "").strip()
                             results = self._search_users(query, requester=username)
+                            groups = self._search_groups(query)
                             payload = {
                                 "type": "search_results",
                                 "query": query,
-                                "results": results
+                                "results": results,
+                                "groups": groups
                             }
                             self._safe_send_json(client, payload)
+                            continue
+                        if action == "create_group":
+                            name = (msg.get("name") or "").strip()
+                            private = bool(msg.get("private", False))
+                            if not name:
+                                self._safe_send_json(client, {"type": "group_created", "status": "error", "message": "Введите название"})
+                                continue
+                            gid = secrets.token_hex(8)
+                            group = {
+                                "id": gid,
+                                "name": name[:80],
+                                "owner": username,
+                                "private": bool(private),
+                                "members": [username],
+                                "invites": [],
+                                "created_at": int(time.time())
+                            }
+                            with self.groups_lock:
+                                self.groups[gid] = group
+                                self.save_groups()
+                            self._safe_send_json(client, {"type": "group_created", "status": "ok", "group": group})
+                            continue
+                        if action == "join_group":
+                            gid = (msg.get("group_id") or "").strip()
+                            if not gid:
+                                continue
+                            with self.groups_lock:
+                                grp = self.groups.get(gid)
+                                if not grp:
+                                    self._safe_send_json(client, {"type": "group_joined", "status": "error", "message": "Группа не найдена"})
+                                    continue
+                                if grp.get("private"):
+                                    self._safe_send_json(client, {"type": "group_joined", "status": "error", "message": "Группа приватная"})
+                                    continue
+                                members = set(grp.get("members") or [])
+                                if username in members:
+                                    self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
+                                    continue
+                                members.add(username)
+                                grp["members"] = list(members)
+                                self.groups[gid] = grp
+                                self.save_groups()
+                            self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
+                            continue
+                        if action == "invite_group":
+                            gid = (msg.get("group_id") or "").strip()
+                            target = (msg.get("username") or "").strip()
+                            if not gid or not target:
+                                continue
+                            with self.groups_lock:
+                                grp = self.groups.get(gid)
+                                if not grp:
+                                    continue
+                                members = set(grp.get("members") or [])
+                                if username not in members:
+                                    continue
+                                invites = set(grp.get("invites") or [])
+                                if target in members or target in invites:
+                                    continue
+                                invites.add(target)
+                                grp["invites"] = list(invites)
+                                self.groups[gid] = grp
+                                self.save_groups()
+                            # notify target if online
+                            target_sock = self._socket_by_username(target)
+                            payload = {"type": "group_invite", "from": username, "group": grp}
+                            if target_sock:
+                                self._safe_send_json(target_sock, payload)
+                            continue
+                        if action == "accept_group_invite":
+                            gid = (msg.get("group_id") or "").strip()
+                            if not gid:
+                                continue
+                            with self.groups_lock:
+                                grp = self.groups.get(gid)
+                                if not grp:
+                                    continue
+                                invites = set(grp.get("invites") or [])
+                                if username not in invites:
+                                    continue
+                                invites.discard(username)
+                                members = set(grp.get("members") or [])
+                                members.add(username)
+                                grp["invites"] = list(invites)
+                                grp["members"] = list(members)
+                                self.groups[gid] = grp
+                                self.save_groups()
+                            self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
+                            # notify other members (best-effort)
+                            with self.clients_lock:
+                                for sock, name in list(self.clients.items()):
+                                    if name in grp.get("members", []) and name != username:
+                                        try:
+                                            self._safe_send_json(sock, {"type": "group_member_added", "group": grp, "username": username})
+                                        except Exception:
+                                            pass
+                            continue
+                        if action == "send_group_message":
+                            gid = (msg.get("group_id") or "").strip()
+                            text = msg.get("message", "")
+                            reply_to = msg.get("reply_to")
+                            if not gid or not text:
+                                continue
+                            with self.groups_lock:
+                                grp = self.groups.get(gid)
+                                if not grp:
+                                    continue
+                                members = set(grp.get("members") or [])
+                                if username not in members:
+                                    continue
+                            # broadcast to group members
+                            msg_id = secrets.token_hex(12)
+                            data = {
+                                "id": msg_id,
+                                "username": username,
+                                "group_id": gid,
+                                "message": text,
+                                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                                "type": "group_message"
+                            }
+                            if reply_to:
+                                data["reply_to"] = reply_to
+                            # store in dm_history for persistence
+                            self.append_dm_history(dict(data))
+                            # send to all members
+                            with self.clients_lock:
+                                for sock, name in list(self.clients.items()):
+                                    if name in members:
+                                        self._safe_send_json(sock, data)
                             continue
                         if action == "add_contact":
                             target = (msg.get("username") or "").strip()
@@ -1642,6 +1830,11 @@ class MAXutkoServer:
                                 self.accounts[target] = acc
                                 self.save_accounts()
                             continue
+
+                    delete_msg_id = msg.get("delete_message")
+                    if delete_msg_id:
+                        self._handle_message_delete(username, delete_msg_id)
+                        continue
 
                     text = msg.get("message")
                     target = msg.get("to", "").strip()
@@ -2043,6 +2236,55 @@ class MAXutkoServer:
         if sender:
             self.send_dm_receipt(sender, updated.get("id"), updated.get("delivered"), True)
 
+    def _handle_message_delete(self, username, msg_id):
+        if not msg_id:
+            return
+        
+        msg = None
+        is_dm = False
+        
+        # Check in dm_history
+        with self.dm_history_lock:
+            msg = self._find_dm_by_id(msg_id)
+            if msg and msg.get("username") == username:
+                is_dm = True
+                self.dm_history.remove(msg)
+                self.save_dm_history()
+        
+        # Check in history (broadcast messages)
+        if not msg:
+            with self.history_lock:
+                for item in self.history:
+                    if item.get("id") == msg_id and item.get("username") == username:
+                        msg = item
+                        self.history.remove(item)
+                        self.save_history()
+                        break
+        
+        if not msg:
+            return
+        
+        # Notify all clients
+        notification = {
+            "type": "message_deleted",
+            "id": msg_id
+        }
+        
+        if is_dm:
+            # Send to sender and recipient
+            sender_sock = self._socket_by_username(username)
+            recipient = msg.get("to")
+            if sender_sock:
+                self._safe_send_json(sender_sock, notification)
+            if recipient:
+                recipient_sock = self._socket_by_username(recipient)
+                if recipient_sock:
+                    self._safe_send_json(recipient_sock, notification)
+        else:
+            # Broadcast to all clients
+            with self.clients_lock:
+                for c in list(self.clients.keys()):
+                    self._safe_send_json(c, notification)
 
     def send_system(self, text):
 

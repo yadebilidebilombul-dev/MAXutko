@@ -6,48 +6,6 @@
     "type": "system"
   },
   {
-    "username": "iwantriker",
-    "message": "nhg",
-    "timestamp": "20:10:59",
-    "type": "message",
-    "id": "88a1b7f8fb5cf4f5316f6f87"
-  },
-  {
-    "username": "iwantriker",
-    "message": "ghn",
-    "timestamp": "20:10:59",
-    "type": "message",
-    "id": "9c346f36236b19fe9989ceb2"
-  },
-  {
-    "username": "iwantriker",
-    "message": "ghn",
-    "timestamp": "20:10:59",
-    "type": "message",
-    "id": "2e4a9ff214e59de80f1a968c"
-  },
-  {
-    "username": "iwantriker",
-    "message": "gh",
-    "timestamp": "20:10:59",
-    "type": "message",
-    "id": "f113921cd09decd49d05b429"
-  },
-  {
-    "username": "iwantriker",
-    "message": "ng",
-    "timestamp": "20:11:00",
-    "type": "message",
-    "id": "e2c7464840b89dd4efe1e015"
-  },
-  {
-    "username": "iwantriker",
-    "message": "hn",
-    "timestamp": "20:11:00",
-    "type": "message",
-    "id": "e91e26e84c9451ff20e2b5a6"
-  },
-  {
     "username": "SYSTEM",
     "message": "test joined the chat",
     "timestamp": "",
@@ -3458,6 +3416,160 @@
   {
     "username": "SYSTEM",
     "message": "test left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "id": "e07de32293fff61e871806f8",
+    "username": "iwantriker",
+    "message": "b",
+    "timestamp": "20:34:15",
+    "type": "message"
+  },
+  {
+    "id": "8505fa26e7f22c0e432ee05e",
+    "username": "iwantriker",
+    "message": "gfgf",
+    "timestamp": "20:34:15",
+    "type": "message"
+  },
+  {
+    "id": "b9b430d89d2843de945b1ff4",
+    "username": "iwantriker",
+    "message": "b",
+    "timestamp": "20:34:15",
+    "type": "message"
+  },
+  {
+    "id": "37911ca31b2fe12c7fe0b7e4",
+    "username": "iwantriker",
+    "message": "fg",
+    "timestamp": "20:34:15",
+    "type": "message"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker joined the chat",
+    "timestamp": "",
+    "type": "system"
+  },
+  {
+    "username": "SYSTEM",
+    "message": "iwantriker left the chat",
     "timestamp": "",
     "type": "system"
   }
