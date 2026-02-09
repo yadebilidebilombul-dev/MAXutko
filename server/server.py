@@ -15,10 +15,21 @@ sys.path.append(BASE_DIR)
 
 from mailSystem.mailCla import MailSender, CodeGenerator, is_console_email
 
+# Testing Mode flag
+TestingMode = True
+
+# Set server host based on TestingMode
+if TestingMode:
+    DEFAULT_HOST = "127.0.0.1"
+else:
+    DEFAULT_HOST = "26.103.185.89"
+
 
 class MAXutkoServer:
 
-    def __init__(self, host="26.202.145.247", port=5555):
+    def __init__(self, host=None, port=5555):
+        if host is None:
+            host = DEFAULT_HOST
 
         self.host = host
         self.port = port
@@ -100,6 +111,11 @@ class MAXutkoServer:
         self.groups_path = os.path.join(os.path.dirname(__file__), "groups.json")
         self.groups_lock = threading.Lock()
         self.groups = self.load_groups()
+
+        # Updates
+        self.updates_path = os.path.join(os.path.dirname(__file__), "updates.json")
+        self.updates_lock = threading.Lock()
+        self.updates = self.load_updates()
 
 
     # ================= ACCOUNTS =================
@@ -332,6 +348,21 @@ class MAXutkoServer:
             pass
         return {}
 
+    def load_updates(self):
+        if not os.path.exists(self.updates_path):
+            return {"version": "0.0.0", "changelog": ""}
+        try:
+            with open(self.updates_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return {
+                    "version": (data.get("version") or "0.0.0").strip(),
+                    "changelog": (data.get("changelog") or "").strip()
+                }
+        except Exception:
+            pass
+        return {"version": "0.0.0", "changelog": ""}
+
     def save_groups(self):
         with open(self.groups_path, "w", encoding="utf-8") as f:
             json.dump(self.groups, f, ensure_ascii=False, indent=2)
@@ -498,6 +529,13 @@ class MAXutkoServer:
             data["token"] = token
         if username:
             data["username"] = username
+        # Add update info on successful login
+        if status == "ok":
+            with self.updates_lock:
+                data["update"] = {
+                    "version": self.updates.get("version", "0.0.0"),
+                    "changelog": self.updates.get("changelog", "")
+                }
         self._safe_send_json(client, data)
 
     def send_passcode(self, client, status, message="", mode="", passcode="", has_passcode=None):
@@ -2341,7 +2379,7 @@ class MAXutkoServer:
 
 def main():
 
-    server = MAXutkoServer(port=5555)
+    server = MAXutkoServer(host=DEFAULT_HOST, port=5555)
 
     server.start()
 

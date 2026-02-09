@@ -1,13 +1,6 @@
 {
   "accounts": [
     {
-      "username": "iwantriker",
-      "token": "07c0542b4f37e1a788df2fbe552e807ee65c8ace88a2c25b",
-      "host": "127.0.0.1",
-      "port": 5555,
-      "last_used": 1770560070
-    },
-    {
       "username": "test",
       "token": "e1a08900ae3a20916b547518a56218c4df15b6151385223a",
       "host": "127.0.0.1",
@@ -16,10 +9,10 @@
     },
     {
       "username": "iwantriker",
-      "token": "89020733b60b56c68a432df701026b8b216b949f2d9dd09e",
-      "host": "26.202.145.247",
+      "token": "8a790034a0ad3f35ae33d7476a95d42be5990da2eb76d804",
+      "host": "127.0.0.1",
       "port": 5555,
-      "last_used": 1770649267
+      "last_used": 1770660505
     }
   ],
   "active": "iwantriker"

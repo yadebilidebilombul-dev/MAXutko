@@ -15,11 +15,33 @@ from overlay_utils import OverlayController
 from notifications import WindowsNotifier, PopupNotifier
 from PyQt5.QtGui import QIcon
 
-SERVER_HOST = "26.202.145.247"
+#flag for testing mode
+TestingMode = True
+
+VersionBulid = "2.1.1"
+
+# Modify server IP and build version based on TestingMode
+if TestingMode:
+    SERVER_HOST = "127.0.0.1"
+    BUILD_VERSION = f"Build {VersionBulid} - Testing Mode"
+else:
+    SERVER_HOST = "26.103.185.89"
+    BUILD_VERSION = f"Build {VersionBulid}"
+
 SERVER_PORT = 5555
 CLANS = ["Одмен", "Новичок", "Старик", "Старейшина", "Модер"]
 CLAN_PRIMARY = {"Одмен", "Модер"}
 CLAN_SECONDARY = {"Старейшина", "Новичок", "Старик"}
+
+# Update URLs on Google Drive (direct download links)
+# TO SET:
+# 1. Upload Updates.json to Google Drive
+# 2. Upload MAXutko.exe to Google Drive
+# 3. Get file IDs from share URLs
+# 4. Create direct download links:
+#    https://drive.google.com/uc?id=FILE_ID&export=download
+UPDATES_JSON_URL = "https://drive.google.com/uc?export=download&id=1DZ6ezC9aR1aJj3xx__uHGR8BgcNBDn8Y"  # Updates.json file ID
+UPDATE_EXE_URL = "https://drive.google.com/uc?export=download&id=1dth5XpBctulLFQNpx6im8RavvI_ja1WT"    # MAXutko.exe file ID
 
 
 def resource_path(relative):
@@ -373,6 +395,90 @@ class AvatarEncodeWorker(QtCore.QThread):
             self.failed.emit("Ошибка обработки файла")
 
 
+class UpdateDownloadWorker(QtCore.QThread):
+    progress = QtCore.pyqtSignal(int, int)
+    finished = QtCore.pyqtSignal(str, str)  # (file_path, version)
+    error = QtCore.pyqtSignal(str)
+
+    def __init__(self, download_url, version, filename="MAXutko.exe"):
+        super().__init__()
+        self.download_url = download_url
+        self.version = version
+        self.filename = filename
+        self._running = True
+
+    def run(self):
+        if not self.download_url:
+            self.error.emit("Ссылка скачивания не указана")
+            return
+
+        try:
+            import urllib.request
+            
+            # Prepare target path
+            downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+            os.makedirs(downloads_dir, exist_ok=True)
+            target_path = os.path.join(downloads_dir, f"{self.filename}")
+
+            # Download file
+            def download_hook(block_num, block_size, total_size):
+                if not self._running:
+                    raise Exception("Download cancelled")
+                downloaded = block_num * block_size
+                if total_size > 0:
+                    self.progress.emit(downloaded, total_size)
+
+            urllib.request.urlretrieve(self.download_url, target_path, download_hook)
+
+            if self._running:
+                self.finished.emit(target_path, self.version)
+        except Exception as e:
+            self.error.emit(f"Ошибка загрузки: {str(e)}")
+
+    def stop(self):
+        self._running = False
+
+
+class UpdateInfoDownloadWorker(QtCore.QThread):
+    """Download and parse Updates.json from Google Drive"""
+    finished = QtCore.pyqtSignal(dict)  # {version, changelog}
+    error = QtCore.pyqtSignal(str)
+
+    def __init__(self, json_url):
+        super().__init__()
+        self.json_url = json_url
+        self._running = True
+
+    def run(self):
+        if not self.json_url:
+            self.error.emit("Ссылка на Updates.json не указана")
+            return
+
+        try:
+            import urllib.request
+            
+            # Download JSON file
+            response = urllib.request.urlopen(self.json_url, timeout=10)
+            content = response.read().decode('utf-8')
+            data = json.loads(content)
+            
+            if not self._running:
+                return
+            
+            # Validate data
+            update_info = {
+                "version": (data.get("version") or "0.0.0").strip(),
+                "changelog": (data.get("changelog") or "").strip()
+            }
+            
+            self.finished.emit(update_info)
+        except Exception as e:
+            self.error.emit(f"Ошибка загрузки обновления: {str(e)}")
+
+    def stop(self):
+        self._running = False
+
+
 class ProfileDialog(QtWidgets.QDialog):
     closed = QtCore.pyqtSignal()
 
@@ -719,6 +825,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.file_button_refs = {}
         self.downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
         self._pending_delete_msg_id = None
+        
+        # Updates
+        self.updates_overlay = None
+        self.current_version = VersionBulid
+        self.available_update = None
 
         self.setup_ui()
         self.show_login_screen()
@@ -893,7 +1004,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         build_layout = QtWidgets.QHBoxLayout(build_row)
         build_layout.setContentsMargins(0, 0, 0, 0)
         build_layout.setSpacing(0)
-        build_label = QtWidgets.QLabel("Build 2.0.2")
+        build_label = QtWidgets.QLabel(BUILD_VERSION)
         build_label.setObjectName("mutedLabel")
         build_layout.addWidget(build_label, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignBottom)
         build_layout.addStretch(1)
@@ -1671,9 +1782,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _show_passcode_overlay(self):
         if not getattr(self, "passcode_overlay", None):
             return
-        if getattr(self, "settings_overlay", None):
-            self.settings_overlay.hide()
-        self._open_passcode_home()
+        self.profile_overlay.hide()
         self.passcode_overlay.show()
         self._request_passcode_status()
 
@@ -2315,6 +2424,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.prebuffer = rest
             self.running = True
             self.show_chat_screen()
+
+            # Check for update
+            update_info = resp.get("update")
+            if update_info:
+                self._handle_update_check(update_info)
 
             self.sender_thread = SenderThread(self.client_socket)
             self.sender_thread.error.connect(lambda _err: None)
@@ -4071,11 +4185,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if gname:
                 items.append({"group_id": gid, "group_name": gname, "is_group": True})
 
-        def _srk(x):
+        # Sort mixed results (users and groups)
+        def _sort_key(x):
             if x.get("is_group"):
                 return (True, (x.get("group_name") or "").casefold())
             return (not bool(x.get("active")), self._display_name(x.get("username") or "").casefold())
-        items.sort(key=_srk)
+        items.sort(key=_sort_key)
 
         self.contact_items = items
         existing = {item.get("username") for item in self.contact_items if item.get("username")}
@@ -4433,6 +4548,262 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _hide_settings_overlay(self):
         if getattr(self, "settings_overlay", None):
             self.settings_overlay.hide()
+
+    def _handle_update_check(self, update_info):
+        """Check if there's a new version available and show notification"""
+        remote_version = (update_info.get("version") or "").strip()
+        changelog = (update_info.get("changelog") or "").strip()
+        
+        if not remote_version or remote_version == self.current_version:
+            return
+        
+        # Store update info
+        self.available_update = {
+            "version": remote_version,
+            "changelog": changelog
+        }
+        
+        # Show update overlay
+        self._show_update_overlay()
+
+    def _show_update_overlay(self):
+        """Show update notification overlay"""
+        if not self.updates_overlay:
+            self._build_updates_overlay()
+        
+        if self.updates_overlay:
+            self.updates_overlay.resize(self.chat_page.rect())
+            self.updates_overlay.show()
+
+    def _build_updates_overlay(self):
+        """Build update notification overlay"""
+        if not hasattr(self, "chat_page"):
+            return
+        
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(12)
+
+        title = QtWidgets.QLabel("Доступно обновление")
+        title_font = QtGui.QFont("Segoe UI", 13, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        # Version info
+        version_info = QtWidgets.QLabel("")
+        if self.available_update:
+            version_text = f"Текущая версия: {self.current_version}\nНовая версия: {self.available_update['version']}"
+            version_info.setText(version_text)
+        version_info.setObjectName("mutedLabel")
+        layout.addWidget(version_info)
+
+        # Changelog
+        changelog_label = QtWidgets.QLabel("Изменения:")
+        changelog_label.setObjectName("mutedLabel")
+        layout.addWidget(changelog_label)
+
+        changelog_text = QtWidgets.QLabel("")
+        if self.available_update:
+            changelog_text.setText(self.available_update.get("changelog", ""))
+        changelog_text.setWordWrap(True)
+        changelog_text.setObjectName("mutedLabel")
+        layout.addWidget(changelog_text)
+
+        layout.addStretch(1)
+
+        # Buttons
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.setSpacing(8)
+        buttons.addStretch(1)
+
+        self.update_later_btn = QtWidgets.QPushButton("Позже")
+        self.update_later_btn.setObjectName("ghostButton")
+        self.update_later_btn.clicked.connect(self._close_update_overlay)
+        buttons.addWidget(self.update_later_btn)
+
+        self.update_now_btn = QtWidgets.QPushButton("Обновить")
+        self.update_now_btn.setObjectName("primaryButton")
+        self.update_now_btn.clicked.connect(self._start_update_download)
+        buttons.addWidget(self.update_now_btn)
+
+        layout.addLayout(buttons)
+
+        self.updates_overlay = OverlayController(
+            self.chat_page,
+            self.chat_content,
+            modal_size=QtCore.QSize(400, 300)
+        )
+        self.updates_overlay.set_content(panel)
+
+    def _close_update_overlay(self):
+        """Close update overlay"""
+        if self.updates_overlay:
+            self.updates_overlay.hide()
+
+    def _start_update_download(self):
+        """Start downloading the update from Google Drive"""
+        if not UPDATES_JSON_URL or not UPDATE_EXE_URL:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Обновление",
+                "Ссылки на файлы обновления не указаны.\n"
+                "Пожалуйста, установите UPDATES_JSON_URL и UPDATE_EXE_URL в app/client.py"
+            )
+            self._close_update_overlay()
+            return
+
+        # Disable button and show progress
+        self.update_now_btn.setEnabled(False)
+        self.update_now_btn.setText("Проверяется версия...")
+
+        # First download Updates.json to verify
+        info_worker = UpdateInfoDownloadWorker(UPDATES_JSON_URL)
+        info_worker.finished.connect(self._on_update_info_downloaded)
+        info_worker.error.connect(self._on_update_info_error)
+        info_worker.start()
+        
+        self.update_info_worker = info_worker
+
+    def _on_update_info_downloaded(self, update_info):
+        """Handle successful Updates.json download"""
+        remote_version = update_info.get("version", "0.0.0")
+        changelog = update_info.get("changelog", "")
+        
+        # Update the overlay with actual info from Google Drive
+        if self.available_update:
+            self.available_update["version"] = remote_version
+            self.available_update["changelog"] = changelog
+        
+        # Now start downloading the EXE file
+        self.update_now_btn.setText("Загружается...")
+        
+        exe_worker = UpdateDownloadWorker(UPDATE_EXE_URL, remote_version, "MAXutko.exe")
+        exe_worker.finished.connect(self._on_update_download_finished)
+        exe_worker.error.connect(self._on_update_download_error)
+        exe_worker.progress.connect(self._on_update_download_progress)
+        exe_worker.start()
+        
+        self.update_download_worker = exe_worker
+
+    def _on_update_info_error(self, error_message):
+        """Handle Updates.json download error"""
+        self.update_now_btn.setEnabled(True)
+        self.update_now_btn.setText("Обновить")
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Ошибка",
+            f"Не удалось проверить обновления:\n{error_message}"
+        )
+
+    def _on_update_download_progress(self, downloaded, total):
+        """Handle download progress"""
+        if total > 0:
+            percent = int(100 * downloaded / total)
+            self.update_now_btn.setText(f"Загружается... {percent}%")
+
+    def _on_update_download_finished(self, file_path, version):
+        """Handle successful download"""
+        try:
+            # Create desktop shortcut
+            self._create_desktop_shortcut(file_path, version)
+            
+            # Show success message
+            QtWidgets.QMessageBox.information(
+                self,
+                "Успешно",
+                f"Обновление загружено в папку Загрузки.\n"
+                f"Ярлык создан на рабочем столе.\n"
+                f"Запустите файл для обновления клиента."
+            )
+            
+            self._close_update_overlay()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Ошибка",
+                f"Не удалось создать ярлык: {str(e)}"
+            )
+            self.update_now_btn.setEnabled(True)
+            self.update_now_btn.setText("Обновить")
+
+    def _on_update_download_error(self, error_message):
+        """Handle download error"""
+        self.update_now_btn.setEnabled(True)
+        self.update_now_btn.setText("Обновить")
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Ошибка загрузки",
+            error_message
+        )
+
+    def _create_desktop_shortcut(self, exe_path, version):
+        """Create a shortcut on the desktop (Windows only)"""
+        try:
+            # Try using pywin32 first
+            import win32com.client
+            
+            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+            shortcut_path = os.path.join(desktop_path, f"MAXutko_v{version}.lnk")
+            
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shortcut = shell.CreateShortCut(shortcut_path)
+            shortcut.TargetPath = exe_path
+            shortcut.WorkingDirectory = os.path.dirname(exe_path)
+            shortcut.Description = f"MAXutko Messenger v{version}"
+            shortcut.save()
+        except ImportError:
+            # Use PowerShell as fallback (available on all Windows versions)
+            self._create_shortcut_powershell(exe_path, version)
+        except Exception:
+            # Last resort: create a batch file
+            self._create_shortcut_batch(exe_path, version)
+
+    def _create_shortcut_powershell(self, exe_path, version):
+        """Create shortcut using PowerShell"""
+        try:
+            import subprocess
+            
+            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+            shortcut_path = os.path.join(desktop_path, f"MAXutko_v{version}.lnk")
+            
+            # PowerShell script to create shortcut
+            ps_script = f"""
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortCut('{shortcut_path}')
+$Shortcut.TargetPath = '{exe_path}'
+$Shortcut.WorkingDirectory = '{os.path.dirname(exe_path)}'
+$Shortcut.Description = 'MAXutko Messenger v{version}'
+$Shortcut.Save()
+"""
+            
+            # Run PowerShell
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script],
+                capture_output=True,
+                timeout=5
+            )
+        except Exception:
+            # Fallback to batch
+            self._create_shortcut_batch(exe_path, version)
+
+    def _create_shortcut_batch(self, exe_path, version):
+        """Create a batch file that can run the update"""
+        try:
+            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+            batch_path = os.path.join(desktop_path, f"MAXutko_v{version}_Update.bat")
+            
+            # Create batch file that runs the exe and waits
+            batch_content = f"""@echo off
+REM MAXutko Update v{version}
+start "" "{exe_path}"
+"""
+            
+            with open(batch_path, "w", encoding="utf-8") as f:
+                f.write(batch_content)
+        except Exception:
+            pass
+
 
     def keyPressEvent(self, event):
         if event.key() == QtCore.Qt.Key_Escape:
