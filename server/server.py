@@ -372,7 +372,11 @@ class MAXutkoServer:
         pw_hash = self._hash_plain(password)
         user_hash = self._hash_plain(username)
         ts_hash = self._hash_plain(timestamp)
-        return f"{pw_hash}:{user_hash * 3}:{ts_hash}"
+        try:
+            combined = (int(pw_hash, 16) + int(user_hash, 16)) * int(ts_hash, 16)
+        except Exception:
+            return ""
+        return format(combined, "x")
 
     def _find_username_by_passcode(self, passcode):
         passcode = (passcode or "").strip()

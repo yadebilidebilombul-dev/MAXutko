@@ -10,6 +10,7 @@ class PopupToast(QtWidgets.QFrame):
         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self._payload = None
+        self._max_width = 320
 
         self.container = QtWidgets.QFrame(self)
         self.container.setObjectName("toastContainer")
@@ -57,6 +58,21 @@ class PopupToast(QtWidgets.QFrame):
         QtCore.QTimer.singleShot(0, self._reposition_after_show)
         self._timer.start(timeout_ms)
 
+    def _update_size(self):
+        self.container.setFixedWidth(self._max_width)
+        container_layout = self.container.layout()
+        if container_layout is not None:
+            container_layout.activate()
+        outer_layout = self.layout()
+        if outer_layout is not None:
+            outer_layout.activate()
+        self.container.adjustSize()
+        self.adjustSize()
+        size = self.sizeHint()
+        if size.isValid():
+            self.setFixedSize(size)
+        return self.size()
+
     def _position(self):
         screen = QtWidgets.QApplication.screenAt(QtGui.QCursor.pos())
         if screen is None:
@@ -68,18 +84,15 @@ class PopupToast(QtWidgets.QFrame):
         if rect == geo:
             rect = QtCore.QRect(rect)
             rect.setHeight(max(0, rect.height() - 48))
-        max_w = 320
-        self.container.setFixedWidth(max_w)
-        self.container.adjustSize()
-        size = self.container.sizeHint()
-        self.setFixedSize(size)
-        self.adjustSize()
+        size = self._update_size()
         margin = 16
-        right_offset = 48
-        x = rect.x() + rect.width() - size.width() - margin - right_offset
-        y = rect.y() + rect.height() - size.height() - margin
-        max_x = rect.x() + rect.width() - size.width() - margin
-        max_y = rect.y() + rect.height() - size.height() - margin
+        right_offset = 8
+        w = size.width()
+        h = size.height()
+        x = rect.x() + rect.width() - w - margin - right_offset
+        y = rect.y() + rect.height() - h - margin
+        max_x = rect.x() + rect.width() - w - margin
+        max_y = rect.y() + rect.height() - h - margin
         min_x = rect.x() + margin
         min_y = rect.y() + margin
         x = max(min_x, min(x, max_x))
@@ -87,6 +100,7 @@ class PopupToast(QtWidgets.QFrame):
         self.move(x, y)
 
     def _reposition_after_show(self):
+        self._update_size()
         screen = QtWidgets.QApplication.screenAt(QtGui.QCursor.pos())
         if screen is None:
             screen = QtWidgets.QApplication.primaryScreen()
@@ -98,7 +112,7 @@ class PopupToast(QtWidgets.QFrame):
             rect = QtCore.QRect(rect)
             rect.setHeight(max(0, rect.height() - 48))
         margin = 16
-        right_offset = 48
+        right_offset = 8
         w = self.frameGeometry().width() or self.width()
         h = self.frameGeometry().height() or self.height()
         max_x = rect.x() + rect.width() - w - margin

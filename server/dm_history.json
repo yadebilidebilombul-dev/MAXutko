@@ -2009,7 +2009,7 @@
     "timestamp": "02:10:26",
     "type": "dm",
     "delivered": true,
-    "read": false
+    "read": true
   },
   {
     "id": "cb20bc308a60f161a04d2f8d",
@@ -2019,7 +2019,7 @@
     "timestamp": "02:10:26",
     "type": "dm",
     "delivered": true,
-    "read": false
+    "read": true
   },
   {
     "id": "6d934829e01e43467cf1452e",
@@ -2029,7 +2029,7 @@
     "timestamp": "02:10:26",
     "type": "dm",
     "delivered": true,
-    "read": false
+    "read": true
   },
   {
     "id": "2d44d2afe99f2ccafda74abf",
@@ -2039,7 +2039,7 @@
     "timestamp": "02:10:26",
     "type": "dm",
     "delivered": true,
-    "read": false
+    "read": true
   },
   {
     "id": "3a2109942d1ab6ea8ed4436a",
@@ -2049,7 +2049,7 @@
     "timestamp": "02:10:26",
     "type": "dm",
     "delivered": true,
-    "read": false
+    "read": true
   },
   {
     "id": "c4fbd773f39ec7c6a07558ca",
@@ -2059,7 +2059,7 @@
     "timestamp": "02:10:36",
     "type": "dm",
     "delivered": true,
-    "read": false
+    "read": true
   },
   {
     "id": "a554927d462aa7c95adce2a6",
@@ -2069,7 +2069,7 @@
     "timestamp": "02:10:36",
     "type": "dm",
     "delivered": true,
-    "read": false
+    "read": true
   },
   {
     "id": "5f5d60870742bdc255e79e6f",
@@ -2079,7 +2079,7 @@
     "timestamp": "02:13:31",
     "type": "dm",
     "delivered": true,
-    "read": false
+    "read": true
   },
   {
     "id": "6c1fb85f89f83da6148deb27",
@@ -2089,7 +2089,7 @@
     "timestamp": "02:13:32",
     "type": "dm",
     "delivered": true,
-    "read": false
+    "read": true
   },
   {
     "id": "e971b62eec9e501550c5ca3d",
@@ -2099,7 +2099,7 @@
     "timestamp": "02:13:32",
     "type": "dm",
     "delivered": true,
-    "read": false
+    "read": true
   },
   {
     "id": "6af2cb36f19f40b44127ee0f",
@@ -2107,6 +2107,396 @@
     "to": "test",
     "message": "fg",
     "timestamp": "02:13:32",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "8310dd2cc3d0c5f124bde253",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "f",
+    "timestamp": "11:41:22",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "1275a4294ff802fe856be435",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "b",
+    "timestamp": "11:41:22",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "3727ad890861abcfd392faeb",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "fdb",
+    "timestamp": "11:41:22",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "36c67b7828d86af175743d04",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "dfb",
+    "timestamp": "11:41:23",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "e868f435ee9effb44f9385b9",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "d",
+    "timestamp": "11:41:23",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "dca6faa132350fd92798a4c2",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "fb",
+    "timestamp": "11:41:23",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "0cd5269185c214dd4e1f15fd",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "df",
+    "timestamp": "11:41:23",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "d2721e2b1a05114862a1b5c7",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "bfb",
+    "timestamp": "11:46:52",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "dff82150593f5555966a9271",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "df",
+    "timestamp": "11:46:52",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "e4bfa8a35841e6cad786bcee",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "b",
+    "timestamp": "11:46:52",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "3ea8294242a6dcfb809083bb",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "dfb",
+    "timestamp": "11:46:52",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "82567f68c966a364ac9bab32",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "b",
+    "timestamp": "11:46:53",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "7dd70056b87ac128070d0a3d",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "т",
+    "timestamp": "11:48:03",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "6c3b933f9bc627bd2ea2cf5c",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "п",
+    "timestamp": "11:48:03",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "d9b1e682ed4418102cfe6fee",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "т",
+    "timestamp": "11:48:04",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "e46890c04cf8625a12f37d5d",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "ап",
+    "timestamp": "11:48:04",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "06fd65b60b51c38922252b1d",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "трп",
+    "timestamp": "11:48:10",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "ca919c6b97fa3d2ebc6dcb49",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "т",
+    "timestamp": "11:48:10",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "226c8fae9774ca6d464a3c38",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "рп",
+    "timestamp": "11:48:10",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "a4bba99cd67de10c22f3ce3d",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "т",
+    "timestamp": "11:48:11",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "ef827e5d6e96fcdf55fae9f7",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "пр",
+    "timestamp": "11:48:11",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "55bd1f730414029b20fbcd6a",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "тпр",
+    "timestamp": "11:48:11",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "d8e035f4d15801a2bda7f0a4",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "итпаи",
+    "timestamp": "11:48:22",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "98daa092334721a22e898551",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "па",
+    "timestamp": "11:48:22",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "6d510674d50170047fb4125e",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "и",
+    "timestamp": "11:48:22",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "0b032770c6d714e34ed2652f",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "па",
+    "timestamp": "11:48:22",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "6acbf8bbce6e4bf0262616f9",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "ипаи",
+    "timestamp": "11:48:23",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "80190ba42b1158d7e966ce3b",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "паи",
+    "timestamp": "11:48:23",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "87916621efadf71c7be4ac6a",
+    "username": "test",
+    "to": "iwantriker",
+    "message": "b",
+    "timestamp": "11:49:16",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "ca5d2d15d03c7bfa2ff6f730",
+    "username": "test",
+    "to": "iwantriker",
+    "message": "gf",
+    "timestamp": "11:49:16",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "bfa638b95b1b6e3e2cbbc542",
+    "username": "test",
+    "to": "iwantriker",
+    "message": "b",
+    "timestamp": "11:49:16",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "6b1cdf5738baf17ab621e607",
+    "username": "test",
+    "to": "iwantriker",
+    "message": "g",
+    "timestamp": "11:49:16",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "e5137955b1fa93d76c2e2a46",
+    "username": "test",
+    "to": "iwantriker",
+    "message": "b",
+    "timestamp": "11:49:17",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "011d6b924d314c9ced93008a",
+    "username": "test",
+    "to": "iwantriker",
+    "message": "fg",
+    "timestamp": "11:49:17",
+    "type": "dm",
+    "delivered": true,
+    "read": true
+  },
+  {
+    "id": "0a33ff1c1c8fec9017cf98b9",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "g",
+    "timestamp": "11:49:25",
+    "type": "dm",
+    "delivered": true,
+    "read": false
+  },
+  {
+    "id": "5cefe2f72faacfc64a795397",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "fn",
+    "timestamp": "11:49:25",
+    "type": "dm",
+    "delivered": true,
+    "read": false
+  },
+  {
+    "id": "10c0de2493811606b9e54ac9",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "fgn",
+    "timestamp": "11:49:25",
+    "type": "dm",
+    "delivered": true,
+    "read": false
+  },
+  {
+    "id": "b367d769f407770e901c2ae4",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "fg",
+    "timestamp": "11:49:25",
+    "type": "dm",
+    "delivered": true,
+    "read": false
+  },
+  {
+    "id": "4251f68c0c14ff541fc5ea47",
+    "username": "iwantriker",
+    "to": "test",
+    "message": "n",
+    "timestamp": "11:49:26",
     "type": "dm",
     "delivered": true,
     "read": false

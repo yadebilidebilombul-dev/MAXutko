@@ -179,10 +179,9 @@ class OverlayController(QtCore.QObject):
         self._anim_group = None
 
     def _cleanup_hide(self):
-        if self.overlay.isVisible():
-            return
         self.overlay.hide()
-        self.content_widget.setGraphicsEffect(None)
+        if self.content_widget.graphicsEffect() is self._blur_effect:
+            self.content_widget.setGraphicsEffect(None)
         if self._blur_effect is not None:
             try:
                 self._blur_effect.deleteLater()
