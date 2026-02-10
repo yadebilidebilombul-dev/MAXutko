@@ -855,6 +855,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.pending_messages_batch = []
         self._scroll_timer_pending = False  # Флаг отложенного скролла
         self._last_rendered_index = {}  # Индексы последнего отрендёренного сообщения по чату
+        self._last_rendered_date = {}  # Ostatnia rendered date per chat (for date separators)
         self._scroll_was_at_bottom = True  # Сохраняет позицию скролла
         self._skip_next_scroll = False  # Флаг для избежания скролла при переключении чатов
         self._last_rendered_count = 0  # Количество отрендёренных сообщений в текущем виде
@@ -3674,6 +3675,84 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if getattr(self, "reply_body_label", None):
             self.reply_body_label.setText("")
 
+    def _get_message_date(self, timestamp):
+        """Извлекает дату из штампа времени"""
+        if not timestamp:
+            return None
+        try:
+            text = str(timestamp).strip()
+            # Если это полный формат с датой (YYYY-MM-DD HH:MM)
+            if " " in text:
+                date_part = text.split(" ")[0]
+                return date_part
+            return None
+        except:
+            return None
+
+    def _format_message_date(self, date_str):
+        """Форматирует дату как 'Сегодня', 'Вчера', или 'ДД ММММ'"""
+        if not date_str:
+            return ""
+        try:
+            from datetime import datetime, timedelta
+            # Парсим дату
+            msg_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            today = datetime.now().date()
+            yesterday = today - timedelta(days=1)
+            
+            if msg_date == today:
+                return "Сегодня"
+            elif msg_date == yesterday:
+                return "Вчера"
+            else:
+                # Форматируем как "15 февраля"
+                months_ru = {
+                    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+                    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+                    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря"
+                }
+                month = months_ru.get(msg_date.month, str(msg_date.month))
+                return f"{msg_date.day} {month}"
+        except:
+            return date_str
+
+    def _create_date_separator(self, date_str):
+        """Создает виджет разделителя с датой (как в Telegram)"""
+        separator = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(separator)
+        layout.setContentsMargins(0, 10, 0, 10)
+        layout.setSpacing(0)
+        
+        # Контейнер для центрирования
+        container = QtWidgets.QWidget()
+        container_layout = QtWidgets.QHBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        
+        # Сам текст даты в "пилюле"
+        label = QtWidgets.QLabel(date_str)
+        label.setObjectName("dateSeparatorLabel")
+        label.setAlignment(QtCore.Qt.AlignCenter)
+        label.setStyleSheet("""
+            QLabel {
+                background: #e5e7eb;
+                color: #6b7280;
+                padding: 6px 14px;
+                border-radius: 18px;
+                font-size: 9pt;
+                font-weight: 500;
+            }
+        """)
+        
+        container_layout.addStretch(1)
+        container_layout.addWidget(label)
+        container_layout.addStretch(1)
+        
+        layout.addWidget(container)
+        separator.setObjectName("dateSeparator")
+        
+        return separator
+
     def _clip_text(self, text, limit=120):
         text = (text or "").replace("\n", " ").strip()
         if len(text) <= limit:
@@ -4302,7 +4381,21 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 display_items = items
                 start_idx = 0
             
+            # Reset date tracking for full render
+            self._last_rendered_date[chat_key] = None
+            
             for idx, item in enumerate(display_items):
+                # Check if date changed and insert separator if needed
+                msg_date = self._get_message_date(item.get("timestamp", ""))
+                last_date = self._last_rendered_date.get(chat_key)
+                
+                if msg_date and msg_date != last_date:
+                    formatted_date = self._format_message_date(msg_date)
+                    if formatted_date:
+                        separator = self._create_date_separator(formatted_date)
+                        self.messages_layout.insertWidget(self.messages_layout.count() - 1, separator)
+                    self._last_rendered_date[chat_key] = msg_date
+                
                 self._render_message(item)
                 self._last_rendered_index[chat_key] = start_idx + idx
             
@@ -4314,6 +4407,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if len(items) > last_idx + 1:
                 # Есть новые сообщения
                 for idx in range(last_idx + 1, len(items)):
+                    # Check if date changed and insert separator if needed
+                    msg_date = self._get_message_date(items[idx].get("timestamp", ""))
+                    last_date = self._last_rendered_date.get(chat_key)
+                    
+                    if msg_date and msg_date != last_date:
+                        formatted_date = self._format_message_date(msg_date)
+                        if formatted_date:
+                            separator = self._create_date_separator(formatted_date)
+                            self.messages_layout.insertWidget(self.messages_layout.count() - 1, separator)
+                        self._last_rendered_date[chat_key] = msg_date
+                    
                     self._render_message(items[idx])
                     self._last_rendered_index[chat_key] = idx
                 
@@ -4327,8 +4431,27 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.batch_render_timer = None
             return
         
+        # Determine current chat key
+        if self.chat_mode == "group":
+            chat_key = "group"
+        elif self.chat_mode == "group_chat" and self.group_chat_target:
+            chat_key = f"group:{self.group_chat_target}"
+        else:
+            chat_key = f"dm:{self.dm_target}"
+        
         # Отрисовываем все сообщения из батча
         for msg in self.pending_messages_batch:
+            # Check if date changed and insert separator if needed
+            msg_date = self._get_message_date(msg.get("timestamp", ""))
+            last_date = self._last_rendered_date.get(chat_key)
+            
+            if msg_date and msg_date != last_date:
+                formatted_date = self._format_message_date(msg_date)
+                if formatted_date:
+                    separator = self._create_date_separator(formatted_date)
+                    self.messages_layout.insertWidget(self.messages_layout.count() - 1, separator)
+                self._last_rendered_date[chat_key] = msg_date
+            
             self._render_message(msg)
         
         # Очищаем батч
@@ -5038,6 +5161,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             widget = item.widget()
             if widget:
                 widget.setParent(None)
+        # Clear date tracking for this chat
+        if self.chat_mode == "group":
+            chat_key = "group"
+        elif self.chat_mode == "group_chat" and self.group_chat_target:
+            chat_key = f"group:{self.group_chat_target}"
+        else:
+            chat_key = f"dm:{self.dm_target}"
+        self._last_rendered_date[chat_key] = None
 
     def _message_widths(self, msg_type):
         viewport = self.scroll_area.viewport().width()

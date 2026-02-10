@@ -2282,7 +2282,7 @@ class MAXutkoServer:
                                 "username": username,
                                 "group_id": gid,
                                 "message": text,
-                                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 "type": "group_message"
                             }
                             if reply_to:
@@ -2409,7 +2409,7 @@ class MAXutkoServer:
             "id": msg_id,
             "username": username,
             "message": text,
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "type": "message"
         }
         if reply_to:
@@ -2448,7 +2448,7 @@ class MAXutkoServer:
             "username": sender,
             "to": target,
             "message": text,
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "type": "dm",
             "delivered": delivered,
             "read": False
@@ -2471,7 +2471,7 @@ class MAXutkoServer:
         data = {
             "id": msg_id,
             "username": sender,
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "type": "file",
             "file_id": file_id,
             "filename": filename,

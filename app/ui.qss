@@ -524,3 +524,15 @@ QListWidget#groupInfoMembersList QWidget {
 QPushButton {
     color: #111827;
 }
+#dateSeparator {
+    background: transparent;
+}
+
+#dateSeparatorLabel {
+    background: #e5e7eb;
+    color: #6b7280;
+    padding: 6px 14px;
+    border-radius: 18px;
+    font-size: 9pt;
+    font-weight: 500;
+}
