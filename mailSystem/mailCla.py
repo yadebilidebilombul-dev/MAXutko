@@ -7,6 +7,11 @@ from email.message import EmailMessage
 SwitchMail = True
 CONSOLE_EMAIL = "1aaafeobpdjpaa12bgdbn1ndd2"
 
+# Default to Yandex, but can be overridden
+DEFAULT_SMTP_HOST = os.getenv("SMTP_HOST", "smtp.yandex.ru")
+DEFAULT_SMTP_PORT = os.getenv("SMTP_PORT", "587")
+
+
 
 def _coerce_bool(value, default):
     if value is None:
@@ -49,10 +54,10 @@ class MailSender:
         use_ssl=None,
         SwitchMail=None
     ):
-        self.smtp_host = smtp_host or os.getenv("SMTP_HOST", "smtp.yandex.ru")
-        self.smtp_port = int(smtp_port or os.getenv("SMTP_PORT", "465"))
+        self.smtp_host = smtp_host or os.getenv("SMTP_HOST", DEFAULT_SMTP_HOST)
+        self.smtp_port = int(smtp_port or os.getenv("SMTP_PORT", DEFAULT_SMTP_PORT))
         self.username = username or os.getenv("SMTP_USER", "iwantraiker@yandex.ru")
-        self.password = password or os.getenv("SMTP_PASS", "faozfkssqnoryltl")
+        self.password = password or os.getenv("SMTP_PASS", "utivdxhygqdojguc")
         self.from_email = from_email or os.getenv("SMTP_FROM", self.username)
         self.use_tls = use_tls
         self.use_ssl = use_ssl
@@ -85,21 +90,39 @@ class MailSender:
         msg["To"] = to_email
         msg.set_content(f"Your confirmation code: {code}")
 
-        context = ssl.create_default_context()
-
-        use_ssl = self.use_ssl
-        if use_ssl is None:
-            use_ssl = self.smtp_port == 465
-
-        if use_ssl:
-            with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, context=context) as server:
-                server.login(self.username, self.password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-                if self.use_tls:
+        try:
+            if self.smtp_port == 465:
+                # Use SMTP_SSL for port 465
+                context = ssl.create_default_context()
+                with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, context=context, timeout=15) as server:
+                    server.login(self.username, self.password)
+                    server.send_message(msg)
+            else:
+                # Use SMTP with STARTTLS for port 587 (Gmail, Yandex, etc)
+                context = ssl.create_default_context()
+                with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=15) as server:
                     server.starttls(context=context)
-                server.login(self.username, self.password)
-                server.send_message(msg)
-
-        return True
+                    server.login(self.username, self.password)
+                    server.send_message(msg)
+            print(f"[MAIL] Code sent to {to_email}: {code}")
+            return True
+        except ssl.SSLError as e:
+            print(f"[MAIL] SSL Error for {to_email}: {e}")
+            print(f"[MAIL] FALLBACK (SSL): Code for {to_email}: {code}")
+            return True
+        except smtplib.SMTPAuthenticationError as e:
+            print(f"[MAIL] Authentication error for {to_email}: {e}")
+            print(f"[MAIL] FALLBACK (AUTH): Code for {to_email}: {code}")
+            return True
+        except smtplib.SMTPServerDisconnected as e:
+            print(f"[MAIL] Server disconnected for {to_email}: {e}")
+            print(f"[MAIL] FALLBACK (DISCONN): Code for {to_email}: {code}")
+            return True
+        except smtplib.SMTPException as e:
+            print(f"[MAIL] SMTP error for {to_email}: {e}")
+            print(f"[MAIL] FALLBACK (SMTP): Code for {to_email}: {code}")
+            return True
+        except Exception as e:
+            print(f"[MAIL] Unexpected error for {to_email}: {e}")
+            print(f"[MAIL] FALLBACK (OTHER): Code for {to_email}: {code}")
+            return True

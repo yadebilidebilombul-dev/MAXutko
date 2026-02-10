@@ -4,7 +4,6 @@ import json
 import os
 import re
 import time
-import hashlib
 import secrets
 import sys
 import base64
@@ -14,6 +13,14 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(BASE_DIR)
 
 from mailSystem.mailCla import MailSender, CodeGenerator, is_console_email
+from crypto_utils import (
+    CryptoUnavailableError,
+    build_passcode,
+    hash_password,
+    is_modern_password_hash,
+    verify_legacy_password,
+    verify_password_hash
+)
 
 # Testing Mode flag
 TestingMode = False
@@ -23,6 +30,103 @@ if TestingMode:
     DEFAULT_HOST = "127.0.0.1"
 else:
     DEFAULT_HOST = "26.202.145.247"
+
+
+# ================= LOGGER =================
+
+class ServerLogger:
+    def __init__(self, log_dir="server"):
+        self.log_dir = os.path.join(os.path.dirname(__file__), log_dir)
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.log_path = os.path.join(self.log_dir, "server.log.json")
+        self.lock = threading.Lock()
+    
+    def log(self, event_type, data):
+        """Логирует событие в JSON формате"""
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "type": event_type,
+            "data": data
+        }
+        
+        with self.lock:
+            # Загрузим существующие логи
+            logs = []
+            if os.path.exists(self.log_path):
+                try:
+                    with open(self.log_path, "r", encoding="utf-8") as f:
+                        logs = json.load(f)
+                except:
+                    logs = []
+            
+            logs.append(log_entry)
+            
+            # Ограничим размер до последних 50000 записей
+            if len(logs) > 50000:
+                logs = logs[-50000:]
+            
+            # Сохраним логи
+            try:
+                with open(self.log_path, "w", encoding="utf-8") as f:
+                    json.dump(logs, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"[!] Ошибка логирования: {e}")
+    
+    def log_auth(self, username, action, status, ip="", error=""):
+        """Логирует действие аутентификации"""
+        self.log("auth", {
+            "username": username,
+            "action": action,
+            "status": status,
+            "ip": ip,
+            "error": error
+        })
+    
+    def log_user_action(self, username, action, target="", details=""):
+        """Логирует пользовательское действие"""
+        self.log("user_action", {
+            "username": username,
+            "action": action,
+            "target": target,
+            "details": details
+        })
+    
+    def log_file_operation(self, username, operation, file_id, filename, size=0, status=""):
+        """Логирует операции с файлами"""
+        self.log("file", {
+            "username": username,
+            "operation": operation,
+            "file_id": file_id,
+            "filename": filename,
+            "size": size,
+            "status": status
+        })
+    
+    def log_error(self, username, error_type, message, context=""):
+        """Логирует ошибку"""
+        self.log("error", {
+            "username": username,
+            "error_type": error_type,
+            "message": message,
+            "context": context
+        })
+    
+    def log_security_event(self, event_type, ip="", details=""):
+        """Логирует события безопасности"""
+        self.log("security", {
+            "event": event_type,
+            "ip": ip,
+            "details": details
+        })
+    
+    def log_group_action(self, username, action, group_id, details=""):
+        """Логирует действия с группами"""
+        self.log("group", {
+            "username": username,
+            "action": action,
+            "group_id": group_id,
+            "details": details
+        })
 
 
 class MAXutkoServer:
@@ -44,6 +148,10 @@ class MAXutkoServer:
 
         self.clients = {}        # socket -> username
         self.clients_lock = threading.Lock()
+        self.client_ips = {}     # socket -> ip
+        self.conn_ips = {}       # socket -> ip (all connections)
+        self.conn_counts = {}    # ip -> count
+        self.conn_lock = threading.Lock()
 
         self.clans = ["Одмен", "Новичок", "Старик", "Старейшина", "Модер"]
         self.primary_clans = {"Одмен", "Модер"}
@@ -123,6 +231,56 @@ class MAXutkoServer:
         self.updates_path = os.path.join(os.path.dirname(__file__), "updates.json")
         self.updates_lock = threading.Lock()
         self.updates = self.load_updates()
+
+        self.logger = ServerLogger()
+
+
+    # ================= LOGGING =================
+
+    def _safe_log(self, event_type, data):
+        try:
+            if self.logger:
+                self.logger.log(event_type, data)
+        except Exception:
+            pass
+
+    def _get_client_ip(self, client):
+        if not client:
+            return ""
+        ip = self.client_ips.get(client)
+        if ip:
+            return ip
+        return self.conn_ips.get(client, "")
+
+    def _sanitize_log_payload(self, payload):
+        if not isinstance(payload, dict):
+            return {"raw": str(payload)[:200]}
+        redacted = {}
+        for key, value in payload.items():
+            if key in {"password", "passcode", "passcode_hash", "token", "hash", "salt"}:
+                continue
+            if key in {"message", "note"}:
+                if isinstance(value, str):
+                    redacted[f"{key}_len"] = len(value)
+                else:
+                    redacted[f"{key}_len"] = 0
+                continue
+            if key in {"data", "data_b64"}:
+                if isinstance(value, str):
+                    redacted[f"{key}_len"] = len(value)
+                else:
+                    redacted[f"{key}_len"] = 0
+                continue
+            redacted[key] = value
+        return redacted
+
+    def _log_client_payload(self, username, ip, payload):
+        sanitized = self._sanitize_log_payload(payload)
+        self._safe_log("client_payload", {
+            "username": username,
+            "ip": ip,
+            "payload": sanitized
+        })
 
 
     # ================= ACCOUNTS =================
@@ -427,9 +585,6 @@ class MAXutkoServer:
             return False
 
 
-    def _hash_plain(self, value):
-        return hashlib.sha256(str(value).encode()).hexdigest()
-
     def _mask_email(self, email):
         email = (email or "").strip()
         if "@" not in email:
@@ -457,22 +612,6 @@ class MAXutkoServer:
             domain_mask = "*" * max(1, len(domain))
         return f"{local_mask}@{domain_mask}"
 
-    def _hash_password(self, password, salt):
-
-        return hashlib.sha256((salt + password).encode()).hexdigest()
-
-    def _build_passcode(self, username, password, timestamp):
-        if not username or not password:
-            return ""
-        pw_hash = self._hash_plain(password)
-        user_hash = self._hash_plain(username)
-        ts_hash = self._hash_plain(timestamp)
-        try:
-            combined = (int(pw_hash, 16) + int(user_hash, 16)) * int(ts_hash, 16)
-        except Exception:
-            return ""
-        return format(combined, "x")
-
     def _find_username_by_passcode(self, passcode):
         passcode = (passcode or "").strip()
         if not passcode:
@@ -490,19 +629,35 @@ class MAXutkoServer:
             return False
 
         salt = stored.get("salt", "")
-        h = stored.get("hash", "")
-        if not salt or not h:
+        h = (stored.get("hash") or "").strip()
+        if not h:
             return False
 
-        return self._hash_password(password, salt) == h
+        if is_modern_password_hash(h):
+            try:
+                return verify_password_hash(h, password)
+            except CryptoUnavailableError:
+                return False
+
+        if salt and verify_legacy_password(h, salt, password):
+            try:
+                new_hash = hash_password(password)
+            except CryptoUnavailableError:
+                return True
+            with self.accounts_lock:
+                stored["hash"] = new_hash
+                stored["salt"] = ""
+                self.save_accounts()
+            return True
+
+        return False
 
 
     def create_account(self, username, password, email):
 
-        salt = secrets.token_hex(16)
-        pw_hash = self._hash_password(password, salt)
+        pw_hash = hash_password(password)
         self.accounts[username] = {
-            "salt": salt,
+            "salt": "",
             "hash": pw_hash,
             "email": email,
             "passcode_hash": "",
@@ -543,6 +698,13 @@ class MAXutkoServer:
                     "version": self.updates.get("version", "0.0.0"),
                     "changelog": self.updates.get("changelog", "")
                 }
+        self._safe_log("auth_response", {
+            "username": username,
+            "status": status,
+            "message": message,
+            "ip": self._get_client_ip(client),
+            "token_issued": bool(token)
+        })
         self._safe_send_json(client, data)
 
     def send_passcode(self, client, status, message="", mode="", passcode="", has_passcode=None):
@@ -558,6 +720,12 @@ class MAXutkoServer:
             data["passcode"] = passcode
         if has_passcode is not None:
             data["has_passcode"] = bool(has_passcode)
+        self._safe_log("passcode_response", {
+            "status": status,
+            "mode": mode,
+            "message": message,
+            "ip": self._get_client_ip(client)
+        })
         self._safe_send_json(client, data)
 
     def _rate_limit(self, key, limit, window_seconds):
@@ -590,6 +758,34 @@ class MAXutkoServer:
         with self.bruteforce_blocked_lock:
             self.bruteforce_blocked_ips[ip] = unblock_time
         print(f"[!] IP {ip} заблокирован от брутфорса на {self.bruteforce_block_duration} сек")
+        self._safe_log("security", {
+            "event": "bruteforce_block",
+            "ip": ip,
+            "details": f"duration={self.bruteforce_block_duration}"
+        })
+        self._deauth_ip(ip, "Disconnected due to brute force activity from your IP.")
+
+
+    def _deauth_ip(self, ip, reason=""):
+        if not ip:
+            return
+        to_kick = []
+        with self.clients_lock:
+            for sock in list(self.clients.keys()):
+                if self.client_ips.get(sock) == ip:
+                    to_kick.append(sock)
+        for sock in to_kick:
+            if reason:
+                try:
+                    self._safe_send_json(sock, {
+                        "type": "system",
+                        "username": "SYSTEM",
+                        "message": reason,
+                        "timestamp": ""
+                    })
+                except Exception:
+                    pass
+            self.remove_client(sock)
 
     def _check_bruteforce(self, ip):
         """Проверяет и отслеживает попытки разгадывания пароля/логина с IP.
@@ -613,6 +809,33 @@ class MAXutkoServer:
                 return True
         
         return False
+
+    def _track_connection(self, client, ip):
+        if not client or not ip:
+            return 0
+        with self.conn_lock:
+            self.conn_ips[client] = ip
+            self.conn_counts[ip] = self.conn_counts.get(ip, 0) + 1
+            return self.conn_counts[ip]
+
+    def _untrack_connection(self, client):
+        if not client:
+            return
+        with self.conn_lock:
+            ip = self.conn_ips.pop(client, None)
+            if not ip:
+                return
+            current = self.conn_counts.get(ip, 0) - 1
+            if current <= 0:
+                self.conn_counts.pop(ip, None)
+            else:
+                self.conn_counts[ip] = current
+
+    def _connection_limit_exceeded(self, ip, limit=20):
+        if not ip:
+            return False
+        with self.conn_lock:
+            return self.conn_counts.get(ip, 0) > limit
 
     def _handle_passcode_status(self, client, username):
         with self.accounts_lock:
@@ -640,7 +863,7 @@ class MAXutkoServer:
         if not stored_email:
             self.send_passcode(client, "error", "Почта не указана", mode="create")
             return
-        passcode_value = self._build_passcode(username, password, int(time.time()))
+        passcode_value = build_passcode(username, password)
         if not passcode_value:
             self.send_passcode(client, "error", "Не удалось создать код", mode="create")
             return
@@ -653,7 +876,19 @@ class MAXutkoServer:
                 "passcode": passcode_value,
                 "mode": "create"
             }
-        self.mailer.send_code(stored_email, code)
+        # Try to send email with retry logic
+        email_sent = False
+        for attempt in range(3):
+            try:
+                email_sent = self.mailer.send_code(stored_email, code)
+                if email_sent:
+                    break
+            except Exception as e:
+                print(f"[!] Passcode create email error (attempt {attempt+1}/3): {e}")
+                if attempt < 2:
+                    time.sleep(1)
+                else:
+                    email_sent = False
         masked = self._mask_email(stored_email)
         self.send_passcode(
             client,
@@ -682,7 +917,7 @@ class MAXutkoServer:
         if not stored_email:
             self.send_passcode(client, "error", "Почта не указана", mode="change")
             return
-        passcode_value = self._build_passcode(username, password, int(time.time()))
+        passcode_value = build_passcode(username, password)
         if not passcode_value:
             self.send_passcode(client, "error", "Не удалось создать код", mode="change")
             return
@@ -695,7 +930,19 @@ class MAXutkoServer:
                 "passcode": passcode_value,
                 "mode": "change"
             }
-        self.mailer.send_code(stored_email, code)
+        # Try to send email with retry logic
+        email_sent = False
+        for attempt in range(3):
+            try:
+                email_sent = self.mailer.send_code(stored_email, code)
+                if email_sent:
+                    break
+            except Exception as e:
+                print(f"[!] Passcode change email error (attempt {attempt+1}/3): {e}")
+                if attempt < 2:
+                    time.sleep(1)
+                else:
+                    email_sent = False
         masked = self._mask_email(stored_email)
         self.send_passcode(
             client,
@@ -1236,6 +1483,25 @@ class MAXutkoServer:
             client, addr = self.server.accept()
 
             print(f"[+] Connection from {addr}")
+            ip = addr[0] if addr else "unknown"
+            self._safe_log("connection", {
+                "event": "accepted",
+                "ip": ip
+            })
+            self._track_connection(client, ip)
+            if self._connection_limit_exceeded(ip, 20):
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                self._untrack_connection(client)
+                print(f"[!] Too many connections from {ip}, connection dropped")
+                self._safe_log("security", {
+                    "event": "connection_limit",
+                    "ip": ip,
+                    "details": "limit=20"
+                })
+                continue
 
             threading.Thread(
                 target=self.handle_client,
@@ -1250,6 +1516,7 @@ class MAXutkoServer:
 
         buffer = ""
         ip = addr[0] if addr else "unknown"
+        username = ""
 
         try:
             # ---- BRUTEFORCE CHECK ----
@@ -1281,6 +1548,11 @@ class MAXutkoServer:
             action = login.get("action", "login")
             token = login.get("token", "")
             passcode = (login.get("passcode") or "").strip()
+
+            self._safe_log("auth_request", {
+                "ip": ip,
+                "payload": self._sanitize_log_payload(login)
+            })
 
             if action == "token_login":
                 if not self._rate_limit(f"auth:token:{ip}", 5, 30):
@@ -1354,19 +1626,31 @@ class MAXutkoServer:
 
                 code = CodeGenerator.generate_code(6)
                 expires_at = time.time() + 300
-                salt = secrets.token_hex(16)
-                pw_hash = self._hash_password(password, salt)
+                pw_hash = hash_password(password)
 
                 with self.pending_lock:
                     self.pending[username] = {
                         "email": email,
-                        "salt": salt,
+                        "salt": "",
                         "hash": pw_hash,
                         "code": code,
                         "expires_at": expires_at
                     }
 
-                self.mailer.send_code(email, code)
+                # Try to send email with retry logic
+                email_sent = False
+                for attempt in range(3):
+                    try:
+                        email_sent = self.mailer.send_code(email, code)
+                        if email_sent:
+                            break
+                    except Exception as e:
+                        print(f"[!] Registration email error (attempt {attempt+1}/3): {e}")
+                        if attempt < 2:
+                            time.sleep(1)
+                        else:
+                            email_sent = False
+                
                 self.send_auth(client, "need_code", "Code sent to email")
 
                 # Wait for verify
@@ -1463,7 +1747,20 @@ class MAXutkoServer:
                         "expires_at": expires_at
                     }
 
-                self.mailer.send_code(email, code)
+                # Try to send email with retry logic
+                email_sent = False
+                for attempt in range(3):
+                    try:
+                        email_sent = self.mailer.send_code(email, code)
+                        if email_sent:
+                            break
+                    except Exception as e:
+                        print(f"[!] Reset password email error (attempt {attempt+1}/3): {e}")
+                        if attempt < 2:
+                            time.sleep(1)
+                        else:
+                            email_sent = False
+                
                 self.send_auth(client, "need_code", "Code sent to email")
 
                 while True:
@@ -1526,8 +1823,7 @@ class MAXutkoServer:
                         self.send_auth(client, "error", "Missing password")
                         continue
 
-                    salt = secrets.token_hex(16)
-                    pw_hash = self._hash_password(new_password, salt)
+                    pw_hash = hash_password(new_password)
 
                     with self.accounts_lock:
                         acc = self.accounts.get(v_user)
@@ -1535,7 +1831,7 @@ class MAXutkoServer:
                             self.send_auth(client, "error", "User not found")
                             client.close()
                             return
-                        acc["salt"] = salt
+                        acc["salt"] = ""
                         acc["hash"] = pw_hash
                         self.accounts[v_user] = acc
                         self.save_accounts()
@@ -1574,6 +1870,7 @@ class MAXutkoServer:
                     return
 
                 self.clients[client] = username
+                self.client_ips[client] = ip
             with self.send_locks_lock:
                 self.send_locks[client] = threading.Lock()
 
@@ -1618,6 +1915,7 @@ class MAXutkoServer:
                         continue
 
                     msg = json.loads(line)
+                    self._log_client_payload(username, ip, msg)
 
                     msg_type = msg.get("type")
                     if msg_type == "dm_read":
@@ -1945,10 +2243,17 @@ class MAXutkoServer:
         except Exception as e:
 
             print("Client error:", e)
+            self._safe_log("error", {
+                "username": username,
+                "error_type": "client",
+                "message": str(e),
+                "context": "handle_client"
+            })
 
         finally:
 
             self.remove_client(client)
+            self._untrack_connection(client)
 
 
     # ================= BROADCAST =================
@@ -2389,6 +2694,9 @@ class MAXutkoServer:
             "type": "system"
         }
 
+        self._safe_log("system_message", {
+            "message_len": len(text) if isinstance(text, str) else 0
+        })
         self.append_history(data)
 
         with self.clients_lock:
@@ -2406,8 +2714,9 @@ class MAXutkoServer:
                 return
 
             username = self.clients[client]
-
+            ip = self.client_ips.get(client, "")
             del self.clients[client]
+            self.client_ips.pop(client, None)
         with self.send_locks_lock:
             self.send_locks.pop(client, None)
 
@@ -2425,6 +2734,11 @@ class MAXutkoServer:
             pass
 
         print(f"[-] {username} disconnected")
+        self._safe_log("connection", {
+            "event": "disconnected",
+            "ip": ip,
+            "username": username
+        })
 
         self.send_system(f"{username} left the chat")
         self.send_all_contacts()

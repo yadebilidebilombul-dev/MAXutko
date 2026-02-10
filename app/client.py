@@ -1535,11 +1535,6 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         title.setFont(title_font)
         home_layout.addWidget(title)
 
-        info = QtWidgets.QLabel("Формат: {hash(pass)}:({hash(login)} * 3):{hash(ts)}")
-        info.setWordWrap(True)
-        info.setObjectName("mutedLabel")
-        home_layout.addWidget(info)
-
         self.passcode_status_label = QtWidgets.QLabel("")
         self.passcode_status_label.setObjectName("mutedLabel")
         home_layout.addWidget(self.passcode_status_label)
@@ -1795,6 +1790,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if not getattr(self, "passcode_overlay", None):
             return
         self.profile_overlay.hide()
+        # Переходим на главную страницу PassCode
+        if getattr(self, "passcode_stack", None):
+            self.passcode_stack.setCurrentWidget(self.passcode_home_page)
         self.passcode_overlay.show()
         self._request_passcode_status()
 
@@ -1816,6 +1814,23 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def _close_passcode_overlay(self):
         if getattr(self, "passcode_overlay", None):
+            # Очищаем все поля перед закрытием
+            if getattr(self, "passcode_result_input", None):
+                self.passcode_result_input.setText("")
+            if getattr(self, "passcode_result_status", None):
+                self.passcode_result_status.setText("")
+            if getattr(self, "passcode_create_password_input", None):
+                self.passcode_create_password_input.clear()
+            if getattr(self, "passcode_create_code_input", None):
+                self.passcode_create_code_input.clear()
+            if getattr(self, "passcode_create_status", None):
+                self.passcode_create_status.setText("")
+            if getattr(self, "passcode_change_password_input", None):
+                self.passcode_change_password_input.clear()
+            if getattr(self, "passcode_change_code_input", None):
+                self.passcode_change_code_input.clear()
+            if getattr(self, "passcode_change_status", None):
+                self.passcode_change_status.setText("")
             self.passcode_overlay.hide()
 
     def _open_passcode_home(self):
