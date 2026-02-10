@@ -96,7 +96,7 @@ class MAXutkoServer:
         self.rate_limits_lock = threading.Lock()
 
         # Brute force protection
-        self.bruteforce_blocked_ips = {}  # ip -> unblock_time
+        self.bruteforce_blocked_ips = {}  # ip -> unblock_tim
         self.bruteforce_blocked_lock = threading.Lock()
         self.bruteforce_threshold = 10  # requests per second
         self.bruteforce_window = 1  # second
