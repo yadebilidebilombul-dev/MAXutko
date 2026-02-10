@@ -3693,10 +3693,25 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return
 
     def _handle_message_deleted(self, msg_id):
+        cached = self.message_index.get(msg_id)
+        chat_key = None
+        if isinstance(cached, dict):
+            tp = cached.get("type")
+            if tp == "dm" or (tp == "file" and cached.get("to")):
+                chat_key = self._conversation_key_for_dm(cached)
+            elif tp == "group_message" or (tp == "file" and cached.get("group_id")):
+                gid = (cached.get("group_id") or "").strip()
+                chat_key = f"group:{gid}" if gid else None
+            else:
+                chat_key = "group"
         for items in self.conversations.values():
             items[:] = [m for m in items if m.get("id") != msg_id]
         if msg_id in self.message_index:
             self.message_index.pop(msg_id, None)
+        if chat_key:
+            self._last_rendered_index[chat_key] = -1
+        else:
+            self._last_rendered_index = {}
         self._render_conversation()
 
     def _start_reply(self, data):
