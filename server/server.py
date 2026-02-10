@@ -1,4 +1,3 @@
-import socket
 import ssl
 import threading
 import json
@@ -21,6 +20,15 @@ from crypto_utils import (
     is_modern_password_hash,
     verify_legacy_password,
     verify_password_hash
+)
+from network_utils import (
+    create_tls_context,
+    create_server_socket,
+    safe_send,
+    safe_send_json,
+    track_connection,
+    untrack_connection,
+    connection_limit_exceeded
 )
 
 # Testing Mode flag
@@ -145,12 +153,7 @@ class ServerLogger:
 class MAXutkoServer:
 
     def _create_tls_context(self):
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_3
-        ctx.maximum_version = ssl.TLSVersion.TLSv1_3
-        ctx.options |= ssl.OP_NO_COMPRESSION
-        ctx.load_cert_chain(certfile=TLS_CERT_PATH, keyfile=TLS_KEY_PATH)
-        return ctx
+        return create_tls_context(TLS_CERT_PATH, TLS_KEY_PATH)
 
     def __init__(self, host=None, port=5555):
         if host is None:
@@ -166,11 +169,7 @@ class MAXutkoServer:
             except Exception as exc:
                 raise RuntimeError(f"TLS configuration failed: {exc}") from exc
 
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        self.server.bind((self.host, self.port))
-        self.server.listen(100)
+        self.server = create_server_socket(self.host, self.port, backlog=100)
 
         print(f"[+] Server started on {self.host}:{self.port}")
 
@@ -237,6 +236,12 @@ class MAXutkoServer:
         self.bruteforce_threshold = 10  # requests per second
         self.bruteforce_window = 1  # second
         self.bruteforce_block_duration = 60  # seconds
+
+        # Message size limits (SEC-003: Prevent DoS via large messages)
+        self.max_message_size = 5000  # characters
+        self.max_profile_nick_size = 32  # characters
+        self.max_profile_about_size = 500  # characters
+        self.max_profile_avatar_size = 250_000  # bytes (base64 encoded)
 
         self.files_dir = os.path.join(os.path.dirname(__file__), "files")
         os.makedirs(self.files_dir, exist_ok=True)
@@ -590,27 +595,10 @@ class MAXutkoServer:
         return base[:180]
 
     def _safe_send(self, sock, data):
-        if sock is None:
-            return False
-        try:
-            if isinstance(data, str):
-                data = data.encode()
-            with self.send_locks_lock:
-                lock = self.send_locks.get(sock)
-            if lock:
-                with lock:
-                    sock.sendall(data)
-            else:
-                sock.sendall(data)
-            return True
-        except Exception:
-            return False
+        return safe_send(self, sock, data)
 
     def _safe_send_json(self, sock, payload):
-        try:
-            return self._safe_send(sock, json.dumps(payload) + "\n")
-        except Exception:
-            return False
+        return safe_send_json(self, sock, payload)
 
 
     def _mask_email(self, email):
@@ -839,31 +827,13 @@ class MAXutkoServer:
         return False
 
     def _track_connection(self, client, ip):
-        if not client or not ip:
-            return 0
-        with self.conn_lock:
-            self.conn_ips[client] = ip
-            self.conn_counts[ip] = self.conn_counts.get(ip, 0) + 1
-            return self.conn_counts[ip]
+        return track_connection(self, client, ip)
 
     def _untrack_connection(self, client):
-        if not client:
-            return
-        with self.conn_lock:
-            ip = self.conn_ips.pop(client, None)
-            if not ip:
-                return
-            current = self.conn_counts.get(ip, 0) - 1
-            if current <= 0:
-                self.conn_counts.pop(ip, None)
-            else:
-                self.conn_counts[ip] = current
+        untrack_connection(self, client)
 
     def _connection_limit_exceeded(self, ip, limit=20):
-        if not ip:
-            return False
-        with self.conn_lock:
-            return self.conn_counts.get(ip, 0) > limit
+        return connection_limit_exceeded(self, ip, limit=limit)
 
     def _handle_passcode_status(self, client, username):
         with self.accounts_lock:
@@ -2073,12 +2043,13 @@ class MAXutkoServer:
                                 acc = self.accounts.get(username)
                                 if acc:
                                     profile = dict(acc.get("profile") or {})
+                                    # SEC-003: Validate profile field sizes
                                     if isinstance(nick, str):
-                                        profile["nick"] = nick[:32]
+                                        profile["nick"] = nick[:self.max_profile_nick_size]
                                     if isinstance(about, str):
-                                        profile["about"] = about[:500]
+                                        profile["about"] = about[:self.max_profile_about_size]
                                     if isinstance(avatar, str):
-                                        if len(avatar) <= 250_000:
+                                        if len(avatar) <= self.max_profile_avatar_size:
                                             profile["avatar"] = avatar
                                     acc["profile"] = profile
                                     self.accounts[username] = acc
@@ -2199,6 +2170,9 @@ class MAXutkoServer:
                             reply_to = msg.get("reply_to")
                             if not gid or not text:
                                 continue
+                            # SEC-003: Validate message size
+                            if isinstance(text, str) and len(text) > self.max_message_size:
+                                continue
                             with self.groups_lock:
                                 grp = self.groups.get(gid)
                                 if not grp:
@@ -2303,6 +2277,11 @@ class MAXutkoServer:
                     reply_to = msg.get("reply_to")
 
                     if not text:
+                        continue
+
+                    # SEC-003: Validate message size
+                    if isinstance(text, str) and len(text) > self.max_message_size:
+                        # Reject oversized message
                         continue
 
                     if target:

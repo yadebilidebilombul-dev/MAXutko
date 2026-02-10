@@ -1,6 +1,8 @@
 import hashlib
 import secrets
 import string
+import os
+import json
 
 try:
     from argon2 import PasswordHasher
@@ -17,6 +19,14 @@ try:
 except Exception:
     bcrypt = None
     _BCRYPT_AVAILABLE = False
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    _FERNET_AVAILABLE = True
+except Exception:
+    Fernet = None
+    InvalidToken = None
+    _FERNET_AVAILABLE = False
 
 
 class CryptoUnavailableError(RuntimeError):
@@ -126,3 +136,87 @@ def build_passcode(username, password):
     except Exception:
         return ""
     return format(combined, "x")
+
+# ================= TOKEN ENCRYPTION =================
+
+_TOKEN_CIPHER = None
+_TOKEN_KEY_PATH = None
+
+
+def _init_token_cipher():
+    """Инициализирует Fernet cipher для шифрования токенов"""
+    global _TOKEN_CIPHER, _TOKEN_KEY_PATH
+    
+    if not _FERNET_AVAILABLE:
+        return False
+    
+    try:
+        token_key_path = os.environ.get(
+            "MAXUTKO_TOKEN_KEY_PATH",
+            os.path.join(os.path.dirname(__file__), ".token_key")
+        )
+        _TOKEN_KEY_PATH = token_key_path
+        
+        if os.path.exists(token_key_path):
+            with open(token_key_path, "rb") as f:
+                key = f.read()
+        else:
+            # Генерируем новый ключ и сохраняем его
+            key = Fernet.generate_key()
+            with open(token_key_path, "wb") as f:
+                f.write(key)
+            # Ограничиваем права доступа к файлу
+            try:
+                os.chmod(token_key_path, 0o600)
+            except:
+                pass
+        
+        _TOKEN_CIPHER = Fernet(key)
+        return True
+    except Exception as e:
+        print(f"[!] Failed to init token cipher: {e}")
+        return False
+
+
+def encrypt_token(token_str):
+    """Шифрует токен перед сохранением на диск"""
+    if not token_str:
+        return token_str
+    
+    global _TOKEN_CIPHER
+    if _TOKEN_CIPHER is None:
+        _init_token_cipher()
+    
+    if _TOKEN_CIPHER is None:
+        # Если Fernet недоступен, возвращаем токен как есть
+        return token_str
+    
+    try:
+        token_bytes = token_str.encode("utf-8")
+        encrypted = _TOKEN_CIPHER.encrypt(token_bytes)
+        return encrypted.decode("ascii")
+    except Exception as e:
+        print(f"[!] Token encryption failed: {e}")
+        return token_str
+
+
+def decrypt_token(encrypted_token):
+    """Расшифровывает токен при загрузке с диска"""
+    if not encrypted_token:
+        return encrypted_token
+    
+    global _TOKEN_CIPHER
+    if _TOKEN_CIPHER is None:
+        _init_token_cipher()
+    
+    if _TOKEN_CIPHER is None:
+        # Если Fernet недоступен, возвращаем токен как есть
+        return encrypted_token
+    
+    try:
+        encrypted_bytes = encrypted_token.encode("utf-8")
+        decrypted = _TOKEN_CIPHER.decrypt(encrypted_bytes)
+        return decrypted.decode("utf-8")
+    except (InvalidToken, Exception) as e:
+        # Токен не зашифрован (старый формат), возвращаем как есть
+        return encrypted_token

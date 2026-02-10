@@ -12,10 +12,19 @@ import time
 import secrets
 import queue
 import getpass
+import gc
 from PyQt5 import QtCore, QtWidgets, QtGui
 from overlay_utils import OverlayController
 from notifications import WindowsNotifier, PopupNotifier
 from PyQt5.QtGui import QIcon
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    _FERNET_AVAILABLE = True
+except Exception:
+    Fernet = None
+    InvalidToken = None
+    _FERNET_AVAILABLE = False
 
 #flag for testing mode
 TestingMode = True
@@ -2318,6 +2327,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                                 continue
                             username = (item.get("username") or "").strip()
                             token = (item.get("token") or "").strip()
+                            # Decrypt token if encrypted
+                            token = self._decrypt_token(token)
                             host = (item.get("host") or "").strip() or self.host
                             port = int(item.get("port") or self.port)
                             if not username or not token:
@@ -2357,10 +2368,77 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         try:
             if data is None:
                 data = self.auth_tokens
+            
+            # Encrypt tokens before saving
+            data_to_save = dict(data)
+            if "accounts" in data_to_save:
+                encrypted_accounts = []
+                for acc in data_to_save["accounts"]:
+                    acc_copy = dict(acc)
+                    acc_copy["token"] = self._encrypt_token(acc_copy.get("token", ""))
+                    encrypted_accounts.append(acc_copy)
+                data_to_save["accounts"] = encrypted_accounts
+            
             with open(self.auth_tokens_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+                json.dump(data_to_save, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
+
+    def _encrypt_token(self, token_str):
+        """Encrypts token before saving to disk"""
+        if not token_str or not _FERNET_AVAILABLE:
+            return token_str
+        
+        try:
+            cipher = self._get_token_cipher()
+            if cipher is None:
+                return token_str
+            token_bytes = token_str.encode("utf-8")
+            encrypted = cipher.encrypt(token_bytes)
+            return encrypted.decode("ascii")
+        except Exception:
+            return token_str
+
+    def _decrypt_token(self, encrypted_token):
+        """Decrypts token when loading from disk"""
+        if not encrypted_token or not _FERNET_AVAILABLE:
+            return encrypted_token
+        
+        try:
+            cipher = self._get_token_cipher()
+            if cipher is None:
+                return encrypted_token
+            encrypted_bytes = encrypted_token.encode("utf-8")
+            decrypted = cipher.decrypt(encrypted_bytes)
+            return decrypted.decode("utf-8")
+        except (InvalidToken, Exception):
+            # Token not encrypted (old format), return as-is
+            return encrypted_token
+
+    def _get_token_cipher(self):
+        """Gets or creates Fernet cipher for token encryption"""
+        if not _FERNET_AVAILABLE:
+            return None
+        
+        try:
+            key_path = os.path.join(os.path.dirname(__file__), ".token_key")
+            
+            if os.path.exists(key_path):
+                with open(key_path, "rb") as f:
+                    key = f.read()
+            else:
+                # Generate new key and save it
+                key = Fernet.generate_key()
+                with open(key_path, "wb") as f:
+                    f.write(key)
+                try:
+                    os.chmod(key_path, 0o600)
+                except:
+                    pass
+            
+            return Fernet(key)
+        except Exception:
+            return None
 
     def _load_settings(self):
         if not os.path.exists(self.settings_path):
@@ -2782,6 +2860,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.client_socket = sock
             self.prebuffer = rest_or_status
             self.running = True
+            
+            # SEC-016: Clear password from memory immediately after auth
+            self.password = ""
+            self.password_input.clear()
+            gc.collect()
+            
             self.show_chat_screen()
 
             self.sender_thread = SenderThread(self.client_socket)
@@ -2799,6 +2883,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 self._remember_account(self.username, token, set_active=True)
 
         def on_error(message):
+            # SEC-016: Clear password even on error
+            self.password = ""
+            self.password_input.clear()
+            gc.collect()
+            
             self.connect_btn.setEnabled(True)
             self.status_label.setText("")
             QtWidgets.QMessageBox.critical(self, "Ошибка", message)
@@ -2836,6 +2925,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.client_socket = sock
             self.prebuffer = rest_or_status
             self.running = True
+            
+            # SEC-016: Clear password from memory immediately after auth
+            self.password = ""
+            self.password_input.clear()
+            gc.collect()
+            
             if getattr(self, "passcode_login_overlay", None):
                 self.passcode_login_overlay.hide()
             self.show_chat_screen()
@@ -2855,6 +2950,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 self._remember_account(self.username, token, set_active=True)
 
         def on_error(message):
+            # SEC-016: Clear password even on error
+            self.password = ""
+            self.password_input.clear()
+            gc.collect()
+            
             self.passcode_login_btn.setEnabled(True)
             self.passcode_login_status.setText(message)
 
@@ -3553,7 +3653,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     # ================= DISPLAY =================
 
-    def display_message(self, data):
+    def display_message(self, data, _depth=0):
+        """
+        SEC-005: Prevent infinite recursion with depth limit
+        """
+        MAX_RECURSION_DEPTH = 5
+        if _depth > MAX_RECURSION_DEPTH:
+            return
+        
         if data.get("type") == "passcode":
             self._handle_passcode_response(data)
             return
@@ -3561,7 +3668,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             items = data.get("items", [])
             for item in items:
                 if isinstance(item, dict):
-                    self.display_message(item)
+                    self.display_message(item, _depth + 1)
             return
         if data.get("type") == "session":
             username = (data.get("username") or "").strip()
