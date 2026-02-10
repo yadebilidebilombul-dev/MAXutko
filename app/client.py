@@ -1527,6 +1527,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.chat_content,
             modal_size=QtCore.QSize(360, 450)
         )
+        self.group_created_overlay = OverlayController(
+            self.chat_page,
+            self.chat_content,
+            modal_size=QtCore.QSize(340, 200)
+        )
         self._build_settings_overlay()
         self._build_passcode_overlay()
         self._build_delete_confirmation_overlay()
@@ -1833,6 +1838,33 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         self.delete_confirmation_overlay.set_content(panel)
 
+    def _build_group_created_overlay(self, group_name):
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+
+        title = QtWidgets.QLabel("✓ Успешно")
+        title_font = QtGui.QFont("Segoe UI", 13, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        title.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(title)
+
+        message = QtWidgets.QLabel(group_name)
+        message.setWordWrap(True)
+        message.setAlignment(QtCore.Qt.AlignCenter)
+        message.setObjectName("mutedLabel")
+        layout.addWidget(message)
+
+        layout.addStretch(1)
+
+        ok_btn = QtWidgets.QPushButton("OK")
+        ok_btn.setObjectName("primaryButton")
+        ok_btn.clicked.connect(self._close_group_created_overlay)
+        layout.addWidget(ok_btn)
+
+        self.group_created_overlay.set_content(panel)
+
     def _build_create_group_overlay(self):
         self.create_group_widget = CreateGroupWidget()
         self.create_group_widget.create_btn.clicked.connect(self._submit_create_group)
@@ -1911,6 +1943,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return
         self._pending_delete_msg_id = None
         self.delete_confirmation_overlay.hide()
+
+    def _close_group_created_overlay(self):
+        if not getattr(self, "group_created_overlay", None):
+            return
+        self.group_created_overlay.hide()
 
     def _confirm_delete_message(self):
         msg_id = self._pending_delete_msg_id
@@ -3972,7 +4009,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 self.groups[gid] = grp
                 # Add to contacts
                 self._add_group_to_contacts(gid, grp)
-                QtWidgets.QMessageBox.information(self, "Группа создана", f"Группа '{grp.get('name','')}' создана")
+                group_name = grp.get('name', '')
+                self._build_group_created_overlay(f"Группа '{group_name}' успешно создана")
+                self.group_created_overlay.show()
             else:
                 QtWidgets.QMessageBox.warning(self, "Ошибка", data.get("message", "Ошибка при создании группы"))
             return
@@ -3985,7 +4024,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 self.groups[gid] = grp
                 # Add to contacts
                 self._add_group_to_contacts(gid, grp)
-                QtWidgets.QMessageBox.information(self, "Вступление", f"Вы вступили в группу '{grp.get('name','')}'")
+                self._build_group_created_overlay(f"Вы вступили в группу '{grp.get('name', '')}'")
+                self.group_created_overlay.show()
             else:
                 QtWidgets.QMessageBox.warning(self, "Ошибка", data.get("message", "Не удалось вступить в группу"))
             return
