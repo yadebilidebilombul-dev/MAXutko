@@ -1,6 +1,8 @@
 ﻿import sys
 import os
 import socket
+import ssl
+import hashlib
 import threading
 import json
 import re
@@ -16,9 +18,9 @@ from notifications import WindowsNotifier, PopupNotifier
 from PyQt5.QtGui import QIcon
 
 #flag for testing mode
-TestingMode = False
+TestingMode = True
 
-VersionBulid = "2.1.1"
+VersionBulid = "2.1.2"
 
 # Modify server IP and build version based on TestingMode
 if TestingMode:
@@ -49,6 +51,52 @@ def resource_path(relative):
         return os.path.join(sys._MEIPASS, relative)
     return os.path.join(os.path.abspath("."), relative)
 
+TLS_ENABLED = False  # set False to allow plaintext TCP
+
+DEFAULT_SERVER_CERT_RELATIVE = os.path.join("certs", "server_cert.pem")
+SERVER_CERT_PATH = os.environ.get("MAXUTKO_SERVER_CERT", resource_path(DEFAULT_SERVER_CERT_RELATIVE))
+
+
+def _compute_cert_fingerprint(cert_path):
+    with open(cert_path, "rb") as f:
+        pem_data = f.read()
+    try:
+        der = ssl.PEM_cert_to_DER_cert(pem_data.decode("ascii"))
+    except Exception as e:
+        raise ValueError(f"Invalid PEM certificate at {cert_path}: {e}")
+    return hashlib.sha256(der).hexdigest()
+
+
+def _build_tls_client(cert_path):
+    if not os.path.exists(cert_path):
+        raise FileNotFoundError(f"TLS certificate not found: {cert_path}")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.maximum_version = ssl.TLSVersion.TLSv1_3
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.check_hostname = False  # we pin the certificate instead
+    context.options |= ssl.OP_NO_COMPRESSION
+    context.load_verify_locations(cafile=cert_path)
+    pinned_fingerprint = _compute_cert_fingerprint(cert_path)
+    return context, pinned_fingerprint
+
+
+def create_secure_socket(host, port):
+    if not TLS_ENABLED:
+        return socket.create_connection((host, port))
+    context, pinned_fp = _build_tls_client(SERVER_CERT_PATH)
+    raw_sock = socket.create_connection((host, port))
+    tls_sock = context.wrap_socket(raw_sock, server_hostname=host)
+    peer_cert = tls_sock.getpeercert(binary_form=True)
+    if not peer_cert:
+        tls_sock.close()
+        raise ssl.SSLError("Server did not provide a certificate")
+    peer_fp = hashlib.sha256(peer_cert).hexdigest()
+    if peer_fp.lower() != pinned_fp.lower():
+        tls_sock.close()
+        raise ssl.SSLError("Server certificate fingerprint mismatch")
+    return tls_sock
+
 
 class AuthWorker(QtCore.QThread):
     success = QtCore.pyqtSignal(object, dict, str)
@@ -67,8 +115,7 @@ class AuthWorker(QtCore.QThread):
 
     def run(self):
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.connect((self.host, self.port))
+            sock = create_secure_socket(self.host, self.port)
             login_data = json.dumps({
                 "action": self.mode,
                 "username": self.username,
@@ -77,7 +124,7 @@ class AuthWorker(QtCore.QThread):
                 "token": self.token,
                 "passcode": self.passcode
             }) + "\n"
-            sock.send(login_data.encode())
+            sock.sendall(login_data.encode())
 
             buffer = ""
             while "\n" not in buffer:
@@ -4978,7 +5025,14 @@ start "" "{exe_path}"
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
+    # Ensure the application (taskbar/minimized) icon is set early
+    icon_path = resource_path("app/icon.ico")
+    app_icon = QIcon(icon_path)
+    app.setWindowIcon(app_icon)
+
     window = MAXutkoClient()
+    # Also set the window icon (shown in the title bar)
+    window.setWindowIcon(app_icon)
     window.show()
     sys.exit(app.exec_())
 

@@ -1,4 +1,5 @@
 import socket
+import ssl
 import threading
 import json
 import os
@@ -23,7 +24,7 @@ from crypto_utils import (
 )
 
 # Testing Mode flag
-TestingMode = False
+TestingMode = True
 
 # Set server host based on TestingMode
 if TestingMode:
@@ -31,6 +32,18 @@ if TestingMode:
 else:
     DEFAULT_HOST = "26.202.145.247"
 
+# TLS settings
+TLS_ENABLED = False  # set False to allow plaintext TCP
+
+# TLS certificate/key locations (override via env for deployments)
+TLS_CERT_PATH = os.environ.get(
+    "MAXUTKO_TLS_CERT",
+    os.path.join(os.path.dirname(__file__), "certs", "server_cert.pem"),
+)
+TLS_KEY_PATH = os.environ.get(
+    "MAXUTKO_TLS_KEY",
+    os.path.join(os.path.dirname(__file__), "certs", "server_key.pem"),
+)
 
 # ================= LOGGER =================
 
@@ -131,12 +144,27 @@ class ServerLogger:
 
 class MAXutkoServer:
 
+    def _create_tls_context(self):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_3
+        ctx.options |= ssl.OP_NO_COMPRESSION
+        ctx.load_cert_chain(certfile=TLS_CERT_PATH, keyfile=TLS_KEY_PATH)
+        return ctx
+
     def __init__(self, host=None, port=5555):
         if host is None:
             host = DEFAULT_HOST
 
         self.host = host
         self.port = port
+
+        self.tls_context = None
+        if TLS_ENABLED:
+            try:
+                self.tls_context = self._create_tls_context()
+            except Exception as exc:
+                raise RuntimeError(f"TLS configuration failed: {exc}") from exc
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1482,19 +1510,18 @@ class MAXutkoServer:
 
             client, addr = self.server.accept()
 
-            print(f"[+] Connection from {addr}")
             ip = addr[0] if addr else "unknown"
             self._safe_log("connection", {
                 "event": "accepted",
                 "ip": ip
             })
-            self._track_connection(client, ip)
-            if self._connection_limit_exceeded(ip, 20):
+            with self.conn_lock:
+                projected = self.conn_counts.get(ip, 0) + 1
+            if projected > 20:
                 try:
                     client.close()
                 except Exception:
                     pass
-                self._untrack_connection(client)
                 print(f"[!] Too many connections from {ip}, connection dropped")
                 self._safe_log("security", {
                     "event": "connection_limit",
@@ -1502,6 +1529,49 @@ class MAXutkoServer:
                     "details": "limit=20"
                 })
                 continue
+
+            if TLS_ENABLED:
+                try:
+                    client = self.tls_context.wrap_socket(client, server_side=True)
+                except ssl.SSLError as e:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                    print(f"[!] TLS handshake failed from {ip}: {e}")
+                    self._safe_log("security", {
+                        "event": "tls_handshake_failed",
+                        "ip": ip,
+                        "error": str(e)
+                    })
+                    continue
+                except Exception as e:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                    print(f"[!] TLS negotiation error from {ip}: {e}")
+                    self._safe_log("security", {
+                        "event": "tls_handshake_error",
+                        "ip": ip,
+                        "error": str(e)
+                    })
+                    continue
+
+            self._track_connection(client, ip)
+            if TLS_ENABLED:
+                try:
+                    cipher = client.cipher()
+                except Exception:
+                    cipher = None
+                self._safe_log("connection", {
+                    "event": "tls_established",
+                    "ip": ip,
+                    "cipher": cipher[0] if cipher else ""
+                })
+                print(f"[+] Secure connection from {addr}")
+            else:
+                print(f"[+] Connection from {addr}")
 
             threading.Thread(
                 target=self.handle_client,

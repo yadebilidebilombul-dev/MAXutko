@@ -836,5 +836,424 @@
         "username": "iwantriker"
       }
     }
+  },
+  {
+    "timestamp": "2026-02-10T23:55:02.162062",
+    "type": "connection",
+    "data": {
+      "event": "disconnected",
+      "ip": "26.202.145.247",
+      "username": "iwantriker"
+    }
+  },
+  {
+    "timestamp": "2026-02-10T23:55:02.165046",
+    "type": "system_message",
+    "data": {
+      "message_len": 24
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:03:29.603354",
+    "type": "connection",
+    "data": {
+      "event": "accepted",
+      "ip": "26.202.145.247"
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:03:29.610376",
+    "type": "error",
+    "data": {
+      "username": "",
+      "error_type": "client",
+      "message": "'utf-8' codec can't decode byte 0xdc in position 4: invalid continuation byte",
+      "context": "handle_client"
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:03:44.444832",
+    "type": "connection",
+    "data": {
+      "event": "accepted",
+      "ip": "26.202.145.247"
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:03:44.448852",
+    "type": "auth_request",
+    "data": {
+      "ip": "26.202.145.247",
+      "payload": {
+        "action": "login",
+        "username": "iwantriker",
+        "email": ""
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:03:44.509615",
+    "type": "auth_response",
+    "data": {
+      "username": "iwantriker",
+      "status": "ok",
+      "message": "",
+      "ip": "26.202.145.247",
+      "token_issued": true
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:03:44.516616",
+    "type": "system_message",
+    "data": {
+      "message_len": 26
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:03:44.531183",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "26.202.145.247",
+      "payload": {
+        "action": "get_profile",
+        "username": "iwantriker"
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:13.547788",
+    "type": "connection",
+    "data": {
+      "event": "disconnected",
+      "ip": "26.202.145.247",
+      "username": "iwantriker"
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:13.551780",
+    "type": "system_message",
+    "data": {
+      "message_len": 24
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:15.955638",
+    "type": "connection",
+    "data": {
+      "event": "accepted",
+      "ip": "26.202.145.247"
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:15.959631",
+    "type": "auth_request",
+    "data": {
+      "ip": "26.202.145.247",
+      "payload": {
+        "action": "login",
+        "username": "iwantriker",
+        "email": ""
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:16.025218",
+    "type": "auth_response",
+    "data": {
+      "username": "iwantriker",
+      "status": "ok",
+      "message": "",
+      "ip": "26.202.145.247",
+      "token_issued": true
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:16.032219",
+    "type": "system_message",
+    "data": {
+      "message_len": 26
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:16.043219",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "26.202.145.247",
+      "payload": {
+        "action": "get_profile",
+        "username": "iwantriker"
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:21.356291",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "26.202.145.247",
+      "payload": {
+        "action": "get_profile",
+        "username": "bfd"
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:21.360293",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "26.202.145.247",
+      "payload": {
+        "action": "get_note",
+        "username": "bfd"
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:50.274991",
+    "type": "connection",
+    "data": {
+      "event": "disconnected",
+      "ip": "26.202.145.247",
+      "username": "iwantriker"
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:04:50.278010",
+    "type": "system_message",
+    "data": {
+      "message_len": 24
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:20.506268",
+    "type": "connection",
+    "data": {
+      "event": "accepted",
+      "ip": "127.0.0.1"
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:20.511252",
+    "type": "auth_request",
+    "data": {
+      "ip": "127.0.0.1",
+      "payload": {
+        "action": "token_login",
+        "username": "",
+        "email": ""
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:20.514269",
+    "type": "auth_response",
+    "data": {
+      "username": "",
+      "status": "error",
+      "message": "Invalid token",
+      "ip": "127.0.0.1",
+      "token_issued": false
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:30.868864",
+    "type": "connection",
+    "data": {
+      "event": "accepted",
+      "ip": "127.0.0.1"
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:30.872719",
+    "type": "auth_request",
+    "data": {
+      "ip": "127.0.0.1",
+      "payload": {
+        "action": "login",
+        "username": "iwantriker",
+        "email": ""
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:30.933685",
+    "type": "auth_response",
+    "data": {
+      "username": "iwantriker",
+      "status": "ok",
+      "message": "",
+      "ip": "127.0.0.1",
+      "token_issued": true
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:30.940405",
+    "type": "system_message",
+    "data": {
+      "message_len": 26
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:30.953148",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "action": "get_profile",
+        "username": "iwantriker"
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:39.323808",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 1
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:39.483653",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 2
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:39.619637",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 3
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:39.779643",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 3
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:39.915631",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 1
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:40.083635",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 3
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:40.251633",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 3
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:40.427632",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 2
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:40.595974",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 1
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:40.730981",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 3
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:40.900960",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 3
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:41.035959",
+    "type": "client_payload",
+    "data": {
+      "username": "iwantriker",
+      "ip": "127.0.0.1",
+      "payload": {
+        "message_len": 2
+      }
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:44.979240",
+    "type": "connection",
+    "data": {
+      "event": "disconnected",
+      "ip": "127.0.0.1",
+      "username": "iwantriker"
+    }
+  },
+  {
+    "timestamp": "2026-02-11T00:30:44.983252",
+    "type": "system_message",
+    "data": {
+      "message_len": 24
+    }
   }
 ]
