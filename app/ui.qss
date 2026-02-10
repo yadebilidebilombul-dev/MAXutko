@@ -250,6 +250,20 @@ QScrollArea {
     color: #1d4ed8;
 }
 
+#groupRow {
+    background: transparent;
+    border-radius: 10px;
+}
+
+#groupRow[selected="true"] {
+    background: #dbeafe;
+    border: 1px solid #bfdbfe;
+}
+
+#groupRow[selected="true"] QLabel {
+    color: #1d4ed8;
+}
+
 #userAvatar {
     background: transparent;
     color: #9ca3af;
@@ -471,6 +485,40 @@ QScrollArea {
 
 #mutedLabel {
     color: #6b7280;
+}
+
+#groupInfoName {
+    color: #1d4ed8;
+    background: #dbeafe;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-weight: 600;
+    font-size: 10.5pt;
+}
+
+#groupInfoMembersPanel {
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+}
+
+#groupInfoMembersTitle {
+    color: #111827;
+    font-weight: 600;
+}
+
+#groupInfoMembersList {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+#groupInfoMembersList::item {
+    padding: 2px 2px;
+}
+
+QListWidget#groupInfoMembersList QWidget {
+    background: transparent;
 }
 
 QPushButton {

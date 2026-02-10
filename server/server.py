@@ -1266,6 +1266,61 @@ class MAXutkoServer:
         for sock, name in items:
             self.send_contacts(sock, name)
 
+    def send_user_groups(self, target_client, username):
+        """Send all groups that the user is a member of"""
+        user_groups = []
+        with self.groups_lock:
+            for gid, grp in self.groups.items():
+                members = set(grp.get("members") or [])
+                if username in members:
+                    user_groups.append({
+                        "id": gid,
+                        "name": grp.get("name", ""),
+                        "owner": grp.get("owner", ""),
+                        "private": bool(grp.get("private", False)),
+                        "members": list(members),
+                        "invites": list(grp.get("invites") or []),
+                        "created_at": grp.get("created_at", 0)
+                    })
+        
+        payload = {
+            "type": "user_groups",
+            "groups": user_groups
+        }
+        self._safe_send_json(target_client, payload)
+
+    def send_group_message_history(self, client, username):
+        """Send group message history for groups the user is in"""
+        # Get groups user is in
+        user_group_ids = set()
+        with self.groups_lock:
+            for gid, grp in self.groups.items():
+                members = set(grp.get("members") or [])
+                if username in members:
+                    user_group_ids.add(gid)
+        
+        # Collect group messages
+        items = []
+        with self.dm_history_lock:
+            for msg in self.dm_history:
+                msg_type = msg.get("type")
+                if msg_type == "group_message":
+                    gid = msg.get("group_id")
+                    if gid in user_group_ids:
+                        items.append(dict(msg))
+                    continue
+                if msg_type == "file":
+                    gid = msg.get("group_id")
+                    if gid and gid in user_group_ids:
+                        items.append(dict(msg))
+        
+        if items:
+            payload = {
+                "type": "group_messages",
+                "items": items
+            }
+            self._safe_send_json(client, payload)
+
 
     def save_dm_history(self):
 
@@ -1931,7 +1986,9 @@ class MAXutkoServer:
             self.send_history(client)
             self.send_dm_history(client, username)
             self.send_pending_receipts(client, username)
+            self.send_user_groups(client, username)
             self.send_contacts(client, username)
+            self.send_group_message_history(client, username)
 
             self.send_system(f"{username} joined the chat")
             self.send_all_contacts()
@@ -2111,6 +2168,37 @@ class MAXutkoServer:
                                 self.save_groups()
                             self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
                             continue
+                        if action == "leave_group":
+                            gid = (msg.get("group_id") or "").strip()
+                            if not gid:
+                                continue
+                            deleted = False
+                            new_owner = ""
+                            with self.groups_lock:
+                                grp = self.groups.get(gid)
+                                if not grp:
+                                    self._safe_send_json(client, {"type": "group_left", "status": "error", "message": "Группа не найдена", "group_id": gid})
+                                    continue
+                                members = list(grp.get("members") or [])
+                                if username not in members:
+                                    self._safe_send_json(client, {"type": "group_left", "status": "error", "message": "Вы не состоите в группе", "group_id": gid})
+                                    continue
+                                members = [m for m in members if m != username]
+                                grp["members"] = members
+                                invites = [u for u in (grp.get("invites") or []) if u != username]
+                                grp["invites"] = invites
+                                if grp.get("owner") == username:
+                                    if members:
+                                        new_owner = members[0]
+                                        grp["owner"] = new_owner
+                                    else:
+                                        deleted = True
+                                        del self.groups[gid]
+                                if not deleted:
+                                    self.groups[gid] = grp
+                                self.save_groups()
+                            self._safe_send_json(client, {"type": "group_left", "status": "ok", "group_id": gid, "deleted": deleted, "new_owner": new_owner})
+                            continue
                         if action == "invite_group":
                             gid = (msg.get("group_id") or "").strip()
                             target = (msg.get("username") or "").strip()
@@ -2169,6 +2257,9 @@ class MAXutkoServer:
                             text = msg.get("message", "")
                             reply_to = msg.get("reply_to")
                             if not gid or not text:
+                                if gid:
+                                    self.log_group_action(username, "send_message_denied", gid, "invalid_message")
+                                    self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Invalid message"})
                                 continue
                             # SEC-003: Validate message size
                             if isinstance(text, str) and len(text) > self.max_message_size:
@@ -2176,9 +2267,13 @@ class MAXutkoServer:
                             with self.groups_lock:
                                 grp = self.groups.get(gid)
                                 if not grp:
+                                    self.log_group_action(username, "send_message_denied", gid, "group_not_found")
+                                    self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Group not found"})
                                     continue
                                 members = set(grp.get("members") or [])
                                 if username not in members:
+                                    self.log_group_action(username, "send_message_denied", gid, "not_in_group")
+                                    self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Not in group"})
                                     continue
                             # broadcast to group members
                             msg_id = secrets.token_hex(12)
@@ -2371,7 +2466,7 @@ class MAXutkoServer:
 
     # ================= FILE TRANSFER =================
 
-    def _build_file_payload(self, sender, target, file_id, filename, size, reply_to=None):
+    def _build_file_payload(self, sender, target, file_id, filename, size, reply_to=None, group_id=None):
         msg_id = secrets.token_hex(12)
         data = {
             "id": msg_id,
@@ -2388,6 +2483,8 @@ class MAXutkoServer:
             data["to"] = target
             data["delivered"] = self._socket_by_username(target) is not None
             data["read"] = False
+        if group_id:
+            data["group_id"] = group_id
         return data
 
     def send_direct_file(self, sender, target, file_id, filename, size, reply_to=None):
@@ -2414,6 +2511,22 @@ class MAXutkoServer:
             for c in list(self.clients.keys()):
                 self._safe_send_json(c, data)
 
+    def send_group_file(self, sender, group_id, file_id, filename, size, reply_to=None):
+        gid = (group_id or "").strip()
+        if not gid:
+            return
+        with self.groups_lock:
+            grp = self.groups.get(gid)
+            members = set(grp.get("members") or []) if grp else set()
+        if not grp or not members:
+            return
+        data = self._build_file_payload(sender, "", file_id, filename, size, reply_to, group_id=gid)
+        self.append_dm_history(dict(data))
+        with self.clients_lock:
+            for sock, name in list(self.clients.items()):
+                if name in members:
+                    self._safe_send_json(sock, data)
+
     def _handle_file_upload_start(self, username, msg, client):
         file_id = (msg.get("file_id") or "").strip()
         filename = (msg.get("filename") or "").strip()
@@ -2422,6 +2535,7 @@ class MAXutkoServer:
         except Exception:
             size = 0
         target = (msg.get("to") or "").strip()
+        group_id = (msg.get("group_id") or "").strip()
         reply_to = msg.get("reply_to")
 
         if not file_id or not filename or size <= 0:
@@ -2438,6 +2552,13 @@ class MAXutkoServer:
                 "message": "File too large"
             })
             return
+        if target and group_id:
+            self._safe_send_json(client, {
+                "type": "file_upload_reject",
+                "file_id": file_id,
+                "message": "Invalid target"
+            })
+            return
         if target and not self._user_exists(target):
             self._safe_send_json(client, {
                 "type": "file_upload_reject",
@@ -2445,6 +2566,24 @@ class MAXutkoServer:
                 "message": "User not found"
             })
             return
+        if group_id:
+            with self.groups_lock:
+                grp = self.groups.get(group_id)
+                members = set(grp.get("members") or []) if grp else set()
+            if not grp:
+                self._safe_send_json(client, {
+                    "type": "file_upload_reject",
+                    "file_id": file_id,
+                    "message": "Group not found"
+                })
+                return
+            if username not in members:
+                self._safe_send_json(client, {
+                    "type": "file_upload_reject",
+                    "file_id": file_id,
+                    "message": "Not in group"
+                })
+                return
 
         safe_name = self._sanitize_filename(filename)
         file_path = os.path.join(self.files_dir, f"{file_id}_{safe_name}")
@@ -2474,6 +2613,7 @@ class MAXutkoServer:
             self.file_uploads[file_id] = {
                 "owner": username,
                 "target": target,
+                "group_id": group_id,
                 "filename": safe_name,
                 "size": size,
                 "received": 0,
@@ -2548,6 +2688,7 @@ class MAXutkoServer:
             "path": state.get("path"),
             "owner": username,
             "target": state.get("target"),
+            "group_id": state.get("group_id"),
             "created_at": state.get("created_at"),
             "scope": "dm" if state.get("target") else "group"
         }
@@ -2556,8 +2697,11 @@ class MAXutkoServer:
             self.save_file_index()
 
         target = state.get("target") or ""
+        group_id = state.get("group_id") or ""
         if target:
             self.send_direct_file(username, target, file_id, meta["filename"], meta["size"], state.get("reply_to"))
+        elif group_id:
+            self.send_group_file(username, group_id, file_id, meta["filename"], meta["size"], state.get("reply_to"))
         else:
             self.broadcast_file(username, file_id, meta["filename"], meta["size"], state.get("reply_to"))
 
@@ -2606,9 +2750,53 @@ class MAXutkoServer:
             })
             return
 
-        scope = meta.get("scope")
+        scope = (meta.get("scope") or "").strip().lower()
         if scope == "dm":
             if username not in {meta.get("owner"), meta.get("target")}:
+                self.log_file_operation(
+                    username,
+                    "download",
+                    file_id,
+                    meta.get("filename") or "",
+                    meta.get("size") or 0,
+                    status="denied"
+                )
+                self._safe_send_json(client, {
+                    "type": "file_error",
+                    "file_id": file_id,
+                    "message": "Not allowed"
+                })
+                return
+        else:
+            group_id = (meta.get("group_id") or "").strip()
+            if group_id:
+                with self.groups_lock:
+                    grp = self.groups.get(group_id)
+                    members = set(grp.get("members") or []) if grp else set()
+                if not grp or username not in members:
+                    self.log_file_operation(
+                        username,
+                        "download",
+                        file_id,
+                        meta.get("filename") or "",
+                        meta.get("size") or 0,
+                        status="denied"
+                    )
+                    self._safe_send_json(client, {
+                        "type": "file_error",
+                        "file_id": file_id,
+                        "message": "Not allowed"
+                    })
+                    return
+            else:
+                self.log_file_operation(
+                    username,
+                    "download",
+                    file_id,
+                    meta.get("filename") or "",
+                    meta.get("size") or 0,
+                    status="denied"
+                )
                 self._safe_send_json(client, {
                     "type": "file_error",
                     "file_id": file_id,
