@@ -16,7 +16,7 @@ from notifications import WindowsNotifier, PopupNotifier
 from PyQt5.QtGui import QIcon
 
 #flag for testing mode
-TestingMode = True
+TestingMode = False
 
 VersionBulid = "2.1.1"
 
@@ -25,7 +25,7 @@ if TestingMode:
     SERVER_HOST = "127.0.0.1"
     BUILD_VERSION = f"Build {VersionBulid} - Testing Mode"
 else:
-    SERVER_HOST = "26.103.185.89"
+    SERVER_HOST = "26.202.145.247"
     BUILD_VERSION = f"Build {VersionBulid}"
 
 SERVER_PORT = 5555
@@ -793,6 +793,15 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.search_query = ""
         self.latest_users = []
         self.user_directory = {}
+        # Оптимизация отображения сообщений
+        self.max_visible_messages = 200  # Максимум сообщений одновременно
+        self.batch_render_timer = None
+        self.pending_messages_batch = []
+        self._scroll_timer_pending = False  # Флаг отложенного скролла
+        self._last_rendered_index = {}  # Индексы последнего отрендёренного сообщения по чату
+        self._scroll_was_at_bottom = True  # Сохраняет позицию скролла
+        self._skip_next_scroll = False  # Флаг для избежания скролла при переключении чатов
+        self._last_rendered_count = 0  # Количество отрендёренных сообщений в текущем виде
         self.groups = {}
         self.my_clan_primary = ""
         self.my_clan_secondary = ""
@@ -1348,6 +1357,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.scroll_area = QtWidgets.QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setObjectName("messagesScroll")
+        # Подключаем отслеживание позиции скролла
+        self.scroll_area.verticalScrollBar().sliderMoved.connect(self._update_scroll_position)
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self._update_scroll_position)
 
         self.messages_widget = QtWidgets.QWidget()
         self.messages_widget.setObjectName("messagesContainer")
@@ -3499,6 +3511,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return
         if data.get("type") == "dm_history":
             items = data.get("items", [])
+            # Проверяем есть ли уже кэшированная история
+            dm_key = f"dm:{self.dm_target}" if self.dm_target else None
+            history_exists = dm_key and dm_key in self.conversations and len(self.conversations[dm_key]) > 0
+            
             for item in items:
                 if isinstance(item, dict):
                     self._store_message(item)
@@ -3506,6 +3522,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             if self.latest_users:
                 self._render_users_list()
             if self.chat_mode == "dm":
+                # Если история уже была загружена, просто рендерим инкрементально
+                # Если это первая загрузка - то _render_conversation сама разберёт
                 self._render_conversation()
                 self._send_read_receipts_for_current()
             return
@@ -3570,6 +3588,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if data.get("type") == "group_message":
             self._store_message(data)
             if self.chat_mode == "group_chat" and self.group_chat_target == data.get("group_id"):
+                # Просто добавляем новое сообщение, не перестраиваем всё
+                self._render_conversation()
+            elif self.chat_mode == "group":
+                # Если это основной общий чат, показываем сообщение
                 self._render_conversation()
             return
         if data.get("type") == "profile":
@@ -3641,7 +3663,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self._notify_dm(data)
             notified = True
         if self._should_render(data):
-            self._render_message(data)
+            # Если это сообщение в активном DM чате, добавляем инкрементально
+            if self.chat_mode == "dm" and self.dm_target:
+                self._render_conversation()  # Инкрементальная отрисовка
+                if self._scroll_was_at_bottom:
+                    QtCore.QTimer.singleShot(5, self._scroll_to_bottom)
+            else:
+                # Иначе просто отрисовываем сообщение
+                self._render_message(data)
             if data.get("type") == "dm":
                 self._maybe_send_read_receipt(data)
         else:
@@ -3815,9 +3844,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             row_layout.addStretch(1)
 
         self.messages_layout.insertWidget(self.messages_layout.count() - 1, row)
-        self.messages_widget.adjustSize()
-        QtCore.QTimer.singleShot(0, self._scroll_to_bottom)
-        QtCore.QTimer.singleShot(50, self._scroll_to_bottom)
+        # Сдерживаем скролл - используем общий таймер вместо множественных вызовов
+        if not getattr(self, '_scroll_timer_pending', False):
+            self._scroll_timer_pending = True
+            QtCore.QTimer.singleShot(50, self._deferred_scroll_to_bottom)
 
     def _conversation_key_for_dm(self, data):
         sender = data.get("username", "")
@@ -3879,23 +3909,85 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         return self.chat_mode == "group"
 
     def _render_conversation(self):
-        self._clear_messages()
+        """Умная отрисовка с инкрементальным обновлением"""
+        # Определяем ключ текущего чата
         if self.chat_mode == "group":
-            items = self.conversations.get("group", [])
+            chat_key = "group"
         elif self.chat_mode == "group_chat" and self.group_chat_target:
-            items = self.conversations.get(f"group:{self.group_chat_target}", [])
+            chat_key = f"group:{self.group_chat_target}"
         else:
-            items = self.conversations.get(f"dm:{self.dm_target}", [])
-        for item in items:
-            self._render_message(item)
+            chat_key = f"dm:{self.dm_target}"
+        
+        items = self.conversations.get(chat_key, [])
+        
+        # Если это первое отрисовка для этого чата - перестраиваем всё
+        last_idx = self._last_rendered_index.get(chat_key, -1)
+        if last_idx == -1:
+            # Первая отрисовка - чистим и отрисовываем всё
+            self._clear_messages()
+            self._skip_next_scroll = True
+            
+            # Ограничиваем количество видимых сообщений для производительности
+            if len(items) > self.max_visible_messages:
+                display_items = items[-self.max_visible_messages:]
+                start_idx = len(items) - self.max_visible_messages
+            else:
+                display_items = items
+                start_idx = 0
+            
+            for idx, item in enumerate(display_items):
+                self._render_message(item)
+                self._last_rendered_index[chat_key] = start_idx + idx
+            
+            self._last_rendered_count = len(display_items)
+            QtCore.QTimer.singleShot(10, self._scroll_to_bottom)
+            self._skip_next_scroll = False
+        else:
+            # Инкрементальное добавление - только новые сообщения
+            if len(items) > last_idx + 1:
+                # Есть новые сообщения
+                for idx in range(last_idx + 1, len(items)):
+                    self._render_message(items[idx])
+                    self._last_rendered_index[chat_key] = idx
+                
+                # Скролл в конец если он был там
+                if self._scroll_was_at_bottom:
+                    QtCore.QTimer.singleShot(5, self._scroll_to_bottom)
+
+    def _flush_message_batch(self):
+        """Отрисовывает накопленные сообщения батчем"""
+        if not self.pending_messages_batch:
+            self.batch_render_timer = None
+            return
+        
+        # Отрисовываем все сообщения из батча
+        for msg in self.pending_messages_batch:
+            self._render_message(msg)
+        
+        # Очищаем батч
+        self.pending_messages_batch.clear()
+        self.batch_render_timer = None
+        # ОднократнΞ готовим скролл в конец
+        QtCore.QTimer.singleShot(5, self._scroll_to_bottom)
 
     def set_chat_mode(self, mode, target=None, group_id=None):
         if mode not in ("group", "dm", "group_chat"):
             return
+        # Очищаем батч перед сменой режима чата
+        if self.batch_render_timer:
+            self.batch_render_timer.stop()
+            self.batch_render_timer = None
+        if self.pending_messages_batch:
+            self._flush_message_batch()
+        
+        # Сохраняем позицию скролла для текущего чата перед переключением
+        self._update_scroll_position()
+        
         self._clear_reply()
         self.chat_mode = mode
         self.dm_target = target if mode == "dm" else None
         self.group_chat_target = group_id if mode == "group_chat" else None
+        
         if mode == "group":
             self.chat_label.setText("Общий чат")
             self.back_btn.setVisible(False)
@@ -3914,7 +4006,19 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 self.chat_label.setText(f"Direct: {self.dm_target}")
             self.back_btn.setVisible(True)
             self._select_user_in_list(self.dm_target)
+        
+        # Проверяем есть ли уже кэшированная история для этого чата
+        if mode == "group":
+            chat_key = "group"
+        elif mode == "group_chat":
+            chat_key = f"group:{group_id}"
+        else:
+            chat_key = f"dm:{target}"
+        
+        # Если история уже кэширована - используем умный рендер с инкрементом
+        # Если её нет - то при рендере будет полная перестройка
         self._render_conversation()
+        
         if self.chat_mode == "dm":
             self._clear_unread(self.dm_target)
             self._send_read_receipts_for_current()
@@ -4443,8 +4547,25 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             row.style().polish(row)
 
     def _scroll_to_bottom(self):
+        if not self._skip_next_scroll:
+            bar = self.scroll_area.verticalScrollBar()
+            bar.setValue(bar.maximum())
+            self._scroll_was_at_bottom = True
+        else:
+            self._skip_next_scroll = False
+
+    def _update_scroll_position(self):
+        """Отслеживает позицию скролла (находимся ли мы в конце)"""
         bar = self.scroll_area.verticalScrollBar()
-        bar.setValue(bar.maximum())
+        # Положение "в конце" если мы на 95% вниз или больше
+        max_val = bar.maximum()
+        curr_val = bar.value()
+        self._scroll_was_at_bottom = (max_val - curr_val) <= (max_val * 0.05 + 50) if max_val > 0 else True
+
+    def _deferred_scroll_to_bottom(self):
+        """Отложенный скролл - выполняется один раз после нескольких сообщений"""
+        self._scroll_timer_pending = False
+        self._scroll_to_bottom()
 
     def _clear_messages(self):
         count = self.messages_layout.count()
@@ -4456,14 +4577,27 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def _message_widths(self, msg_type):
         viewport = self.scroll_area.viewport().width()
+        # Минимум 400px для корректного отображения
         if viewport <= 0:
-            viewport = 720
-        if msg_type == "system":
-            max_w = int(viewport * 0.55)
-            min_w = min(260, max_w)
+            viewport = 400
+        
+        # Используем более агрессивный процент для маленьких окон
+        if viewport < 500:
+            # На маленьких экранах используем 85-90% viewport
+            if msg_type == "system":
+                max_w = int(viewport * 0.85)
+                min_w = min(200, max_w)
+            else:
+                max_w = int(viewport * 0.88)
+                min_w = min(max(120, int(viewport * 0.70)), max_w)
         else:
-            max_w = int(viewport * 0.62)
-            min_w = min(max(240, int(viewport * 0.34)), max_w)
+            # На больших экранах обычная логика
+            if msg_type == "system":
+                max_w = int(viewport * 0.55)
+                min_w = min(260, max_w)
+            else:
+                max_w = int(viewport * 0.62)
+                min_w = min(max(240, int(viewport * 0.34)), max_w)
         return min_w, max_w
 
     def _update_message_widths(self):
@@ -4505,6 +4639,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def _disconnect_internal(self, show_login=True):
         self.running = False
+        # Очищаем батч перед отключением
+        if self.batch_render_timer:
+            self.batch_render_timer.stop()
+            self.batch_render_timer = None
+        self.pending_messages_batch.clear()
         if self.receiver_thread:
             self.receiver_thread.stop()
         if self.sender_thread:

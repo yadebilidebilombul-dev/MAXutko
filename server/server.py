@@ -16,13 +16,13 @@ sys.path.append(BASE_DIR)
 from mailSystem.mailCla import MailSender, CodeGenerator, is_console_email
 
 # Testing Mode flag
-TestingMode = True
+TestingMode = False
 
 # Set server host based on TestingMode
 if TestingMode:
     DEFAULT_HOST = "127.0.0.1"
 else:
-    DEFAULT_HOST = "26.103.185.89"
+    DEFAULT_HOST = "26.202.145.247"
 
 
 class MAXutkoServer:
@@ -94,6 +94,13 @@ class MAXutkoServer:
         self.mailer = MailSender()
         self.rate_limits = {}
         self.rate_limits_lock = threading.Lock()
+
+        # Brute force protection
+        self.bruteforce_blocked_ips = {}  # ip -> unblock_time
+        self.bruteforce_blocked_lock = threading.Lock()
+        self.bruteforce_threshold = 10  # requests per second
+        self.bruteforce_window = 1  # second
+        self.bruteforce_block_duration = 60  # seconds
 
         self.files_dir = os.path.join(os.path.dirname(__file__), "files")
         os.makedirs(self.files_dir, exist_ok=True)
@@ -564,6 +571,48 @@ class MAXutkoServer:
             bucket.append(now)
             self.rate_limits[key] = bucket
             return True
+
+    def _is_ip_blocked(self, ip):
+        """Проверяет, заблокирован ли IP адрес от брутфорса."""
+        now = time.time()
+        with self.bruteforce_blocked_lock:
+            unblock_time = self.bruteforce_blocked_ips.get(ip)
+            if unblock_time is None:
+                return False
+            if now >= unblock_time:
+                del self.bruteforce_blocked_ips[ip]
+                return False
+            return True
+
+    def _block_ip(self, ip):
+        """Блокирует IP адрес на bruteforce_block_duration секунд."""
+        unblock_time = time.time() + self.bruteforce_block_duration
+        with self.bruteforce_blocked_lock:
+            self.bruteforce_blocked_ips[ip] = unblock_time
+        print(f"[!] IP {ip} заблокирован от брутфорса на {self.bruteforce_block_duration} сек")
+
+    def _check_bruteforce(self, ip):
+        """Проверяет и отслеживает попытки разгадывания пароля/логина с IP.
+        Returns True если IP заблокирован, False если допустим."""
+        if self._is_ip_blocked(ip):
+            return True
+        
+        now = time.time()
+        key = f"auth:bruteforce:{ip}"
+        
+        with self.rate_limits_lock:
+            bucket = self.rate_limits.setdefault(key, [])
+            # Очищаем старые записи
+            bucket = [t for t in bucket if now - t < self.bruteforce_window]
+            bucket.append(now)
+            self.rate_limits[key] = bucket
+            
+            # Проверяем превышение порога
+            if len(bucket) > self.bruteforce_threshold:
+                self._block_ip(ip)
+                return True
+        
+        return False
 
     def _handle_passcode_status(self, client, username):
         with self.accounts_lock:
@@ -1203,6 +1252,13 @@ class MAXutkoServer:
         ip = addr[0] if addr else "unknown"
 
         try:
+            # ---- BRUTEFORCE CHECK ----
+            
+            if self._check_bruteforce(ip):
+                self.send_auth(client, "error", "Too many login attempts. IP blocked for 1 minute.")
+                client.close()
+                return
+
             # ---- LOGIN ----
 
             while "\n" not in buffer:
