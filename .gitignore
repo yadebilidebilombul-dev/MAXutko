@@ -46,6 +46,7 @@ desktop.ini
 **/dm_receipts.json
 **/files_index.json
 **/updates.json
+**/.token_key
 *.log
 
 # User-uploaded files
