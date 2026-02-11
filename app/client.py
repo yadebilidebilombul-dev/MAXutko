@@ -27,16 +27,16 @@ except Exception:
     _FERNET_AVAILABLE = False
 
 #flag for testing mode
-TestingMode = True
+TestingMode = False
 
-VersionBulid = "2.1.2"
+VersionBulid = "2.1.3"
 
 # Modify server IP and build version based on TestingMode
 if TestingMode:
     SERVER_HOST = "127.0.0.1"
     BUILD_VERSION = f"Build {VersionBulid} - Testing Mode"
 else:
-    SERVER_HOST = "26.202.145.247"
+    SERVER_HOST = "26.103.185.89"
     BUILD_VERSION = f"Build {VersionBulid}"
 
 SERVER_PORT = 5555
@@ -1384,7 +1384,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         search_row_layout.setSpacing(6)
         search_row_layout.addWidget(self.users_search)
         self.create_group_btn = QtWidgets.QPushButton("+")
-        self.create_group_btn.setFixedSize(28, 28)
+        self.create_group_btn.setFixedSize(35, 35)
         self.create_group_btn.setObjectName("ghostButton")
         self.create_group_btn.setToolTip("Создать группу")
         self.create_group_btn.clicked.connect(self._show_create_group_dialog)
@@ -1587,6 +1587,16 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.settings_notifications_checkbox.setChecked(False)
             self.settings_notifications_checkbox.setEnabled(False)
             self.settings_notifications_checkbox.setToolTip("Системные уведомления недоступны.")
+
+        iwanTrikerCprght = QtWidgets.QLabel(
+            f"Build: {VersionBulid}"
+            " ЯьЙ! By iwanTriker and..."
+            " No Contrybuters :c"
+        )
+        iwanTrikerCprght.setWordWrap(True)
+        iwanTrikerCprght.setObjectName("mutedLabel")
+        iwanTrikerCprght.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(iwanTrikerCprght)
 
         self.settings_overlay.set_content(panel)
 
