@@ -29,7 +29,7 @@ except Exception:
 #flag for testing mode
 TestingMode = False
 
-VersionBulid = "2.1.3"
+VersionBulid = "2.1.4"
 
 # Modify server IP and build version based on TestingMode
 if TestingMode:
