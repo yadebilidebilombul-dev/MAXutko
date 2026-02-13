@@ -38,7 +38,7 @@ TestingMode = False
 if TestingMode:
     DEFAULT_HOST = "127.0.0.1"
 else:
-    DEFAULT_HOST = "26.103.185.89"
+    DEFAULT_HOST = "26.202.145.247"
 
 # TLS settings
 TLS_ENABLED = False  # set False to allow plaintext TCP
