@@ -161,6 +161,19 @@ QPushButton#ghostButton:hover {
     background: #f3f4f6;
 }
 
+QPushButton#circleBackButton {
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #d1d5db;
+    border-radius: 14px;
+    padding: 0px;
+    font-weight: 600;
+}
+
+QPushButton#circleBackButton:hover {
+    background: #f3f4f6;
+}
+
 QPushButton#dangerButton {
     background: #ef4444;
     color: #ffffff;
@@ -535,4 +548,27 @@ QPushButton {
     border-radius: 18px;
     font-size: 9pt;
     font-weight: 500;
+}
+
+#adminUsersTable {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    alternate-background-color: #f9fafb;
+}
+
+#adminUsersTable::item {
+    padding: 6px 8px;
+}
+
+#adminUsersTable::item:selected {
+    background: #dbeafe;
+}
+
+#adminUsersTable QHeaderView::section {
+    background: #f3f4f6;
+    color: #111827;
+    border: 1px solid #e5e7eb;
+    padding: 6px 8px;
+    font-weight: 600;
 }

@@ -53,6 +53,12 @@ TLS_KEY_PATH = os.environ.get(
     os.path.join(os.path.dirname(__file__), "certs", "server_key.pem"),
 )
 
+DEACTIVATED_LOGIN_MESSAGE = (
+    "Извините, но нам пришлось деактивировать или удалить ваш аккаунт. "
+    "Что бы оспорить данное решение напишите на наш адрес эль. почты: "
+    "moro23728@gmail.com"
+)
+
 # ================= LOGGER =================
 
 class ServerLogger:
@@ -190,6 +196,10 @@ class MAXutkoServer:
         self.accounts_lock = threading.Lock()
         self.accounts = self.load_accounts()
 
+        self.account_blocks_path = os.path.join(os.path.dirname(__file__), "account_blocks.json")
+        self.account_blocks_lock = threading.Lock()
+        self.account_blocks = self.load_account_blocks()
+
         self.notes_path = os.path.join(os.path.dirname(__file__), "notes.json")
         self.notes_lock = threading.Lock()
         self.notes = self.load_notes()
@@ -313,6 +323,20 @@ class MAXutkoServer:
             "username": username,
             "ip": ip,
             "payload": sanitized
+        })
+
+    def log_group_action(self, username, action, group_id, details=""):
+        try:
+            if self.logger:
+                self.logger.log_group_action(username, action, group_id, details)
+                return
+        except Exception:
+            pass
+        self._safe_log("group", {
+            "username": username,
+            "action": action,
+            "group_id": group_id,
+            "details": details
         })
 
 
@@ -1046,6 +1070,79 @@ class MAXutkoServer:
         with open(self.notes_path, "w", encoding="utf-8") as f:
             json.dump(self.notes, f, ensure_ascii=False, indent=2)
 
+    # ================= ACCOUNT BLOCKS =================
+
+    def load_account_blocks(self):
+
+        if not os.path.exists(self.account_blocks_path):
+            return {}
+
+        try:
+            with open(self.account_blocks_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                cleaned = {}
+                for name, item in data.items():
+                    if not name:
+                        continue
+                    if isinstance(item, dict):
+                        status = (item.get("status") or "").strip() or "deactivated"
+                        ts = int(item.get("timestamp") or 0)
+                        cleaned[str(name)] = {"status": status, "timestamp": ts}
+                    elif isinstance(item, str):
+                        cleaned[str(name)] = {"status": item, "timestamp": 0}
+                return cleaned
+        except:
+            pass
+
+        return {}
+
+    def save_account_blocks(self):
+        with open(self.account_blocks_path, "w", encoding="utf-8") as f:
+            json.dump(self.account_blocks, f, ensure_ascii=False, indent=2)
+
+    def _account_block_status(self, username):
+        if not username:
+            return ""
+        with self.account_blocks_lock:
+            entry = self.account_blocks.get(username)
+        if isinstance(entry, dict):
+            return (entry.get("status") or "").strip()
+        if isinstance(entry, str):
+            return entry.strip()
+        return ""
+
+    def _is_account_blocked(self, username):
+        return bool(self._account_block_status(username))
+
+    def _set_account_block(self, username, status):
+        username = (username or "").strip()
+        if not username:
+            return False
+        status = (status or "").strip() or "deactivated"
+        with self.account_blocks_lock:
+            self.account_blocks[username] = {
+                "status": status,
+                "timestamp": int(time.time())
+            }
+            self.save_account_blocks()
+
+        sock = self._socket_by_username(username)
+        if sock:
+            self.remove_client(sock)
+        return True
+
+    def _clear_account_block(self, username):
+        username = (username or "").strip()
+        if not username:
+            return False
+        with self.account_blocks_lock:
+            if username in self.account_blocks:
+                self.account_blocks.pop(username, None)
+                self.save_account_blocks()
+                return True
+        return False
+
 
     def get_note(self, owner, target):
         with self.notes_lock:
@@ -1198,6 +1295,91 @@ class MAXutkoServer:
                 return True
         with self.clients_lock:
             return username in self.clients.values()
+
+    def _delete_account(self, username):
+        username = (username or "").strip()
+        if not username:
+            return False, "Пользователь не найден"
+
+        removed = False
+        with self.accounts_lock:
+            if username in self.accounts:
+                del self.accounts[username]
+                self.save_accounts()
+                removed = True
+        if not removed:
+            return False, "Пользователь не найден"
+
+        with self.tokens_lock:
+            changed = False
+            for token, item in list(self.tokens.items()):
+                if (item.get("username") or "").strip() == username:
+                    del self.tokens[token]
+                    changed = True
+            if changed:
+                self.save_tokens()
+
+        with self.contacts_lock:
+            changed = False
+            if username in self.contacts:
+                self.contacts.pop(username, None)
+                changed = True
+            for owner, items in list(self.contacts.items()):
+                if username in items:
+                    self.contacts[owner] = [x for x in items if x != username]
+                    changed = True
+            if changed:
+                self.save_contacts()
+
+        with self.notes_lock:
+            changed = False
+            if username in self.notes:
+                self.notes.pop(username, None)
+                changed = True
+            for owner, notes in list(self.notes.items()):
+                if isinstance(notes, dict) and username in notes:
+                    notes.pop(username, None)
+                    self.notes[owner] = notes
+                    changed = True
+            if changed:
+                self.save_notes()
+
+        with self.groups_lock:
+            changed = False
+            for gid, grp in list(self.groups.items()):
+                members = list(grp.get("members") or [])
+                invites = list(grp.get("invites") or [])
+                owner = (grp.get("owner") or "").strip()
+                if username not in members and username not in invites and owner != username:
+                    continue
+                members = [m for m in members if m != username]
+                invites = [m for m in invites if m != username]
+                if owner == username:
+                    if members:
+                        grp["owner"] = members[0]
+                    else:
+                        del self.groups[gid]
+                        changed = True
+                        continue
+                grp["members"] = members
+                grp["invites"] = invites
+                self.groups[gid] = grp
+                changed = True
+            if changed:
+                self.save_groups()
+
+        with self.receipts_lock:
+            if username in self.receipts_pending:
+                self.receipts_pending.pop(username, None)
+                self.save_receipts()
+
+        sock = self._socket_by_username(username)
+        if sock:
+            self.remove_client(sock)
+
+        self._set_account_block(username, "deleted")
+
+        return True, ""
 
     def _add_contact_pair(self, user_a, user_b):
         if not user_a or not user_b or user_a == user_b:
@@ -1491,6 +1673,41 @@ class MAXutkoServer:
             "users": users
         }
 
+    def _build_admin_users_payload(self):
+        with self.accounts_lock:
+            accounts = dict(self.accounts)
+        with self.account_blocks_lock:
+            blocks = dict(self.account_blocks)
+
+        users = []
+        for name, acc in accounts.items():
+            email = (acc.get("email") or "").strip()
+            registered_at = acc.get("registered_at", 0)
+            try:
+                registered_at = int(registered_at)
+            except Exception:
+                registered_at = 0
+            entry = blocks.get(name, {})
+            status = ""
+            if isinstance(entry, dict):
+                status = (entry.get("status") or "").strip()
+            elif isinstance(entry, str):
+                status = entry.strip()
+            deactivated = bool(status)
+            users.append({
+                "username": name,
+                "email": email,
+                "registered_at": registered_at,
+                "deactivated": deactivated
+            })
+
+        users.sort(key=lambda x: (x.get("username") or "").casefold())
+        return {
+            "type": "admin_users",
+            "status": "ok",
+            "users": users
+        }
+
     def send_user_list(self, target_client=None):
         payload = self._build_users_payload()
         if target_client is not None:
@@ -1659,6 +1876,10 @@ class MAXutkoServer:
                     self.send_auth(client, "error", "Invalid token")
                     client.close()
                     return
+                if self._is_account_blocked(username):
+                    self.send_auth(client, "error", DEACTIVATED_LOGIN_MESSAGE)
+                    client.close()
+                    return
             elif action == "passcode_login":
                 if not self._rate_limit(f"auth:passcode:{ip}", 10, 60):
                     self.send_auth(client, "error", "Too many attempts")
@@ -1671,6 +1892,10 @@ class MAXutkoServer:
                 username = self._find_username_by_passcode(passcode)
                 if not username:
                     self.send_auth(client, "error", "Invalid PassCodeHash")
+                    client.close()
+                    return
+                if self._is_account_blocked(username):
+                    self.send_auth(client, "error", DEACTIVATED_LOGIN_MESSAGE)
                     client.close()
                     return
             elif not username:
@@ -1940,7 +2165,15 @@ class MAXutkoServer:
                     stored = self.accounts.get(username)
 
                 if not stored:
-                    self.send_auth(client, "error", "User not found")
+                    if self._is_account_blocked(username):
+                        self.send_auth(client, "error", DEACTIVATED_LOGIN_MESSAGE)
+                    else:
+                        self.send_auth(client, "error", "User not found")
+                    client.close()
+                    return
+
+                if self._is_account_blocked(username):
+                    self.send_auth(client, "error", DEACTIVATED_LOGIN_MESSAGE)
                     client.close()
                     return
 
@@ -2167,6 +2400,8 @@ class MAXutkoServer:
                                 self.groups[gid] = grp
                                 self.save_groups()
                             self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
+                            self.send_user_groups(client, username)
+                            self.send_group_message_history(client, username)
                             continue
                         if action == "leave_group":
                             gid = (msg.get("group_id") or "").strip()
@@ -2272,9 +2507,17 @@ class MAXutkoServer:
                                     continue
                                 members = set(grp.get("members") or [])
                                 if username not in members:
-                                    self.log_group_action(username, "send_message_denied", gid, "not_in_group")
-                                    self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Not in group"})
-                                    continue
+                                    if grp.get("private"):
+                                        self.log_group_action(username, "send_message_denied", gid, "not_in_group")
+                                        self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Not in group"})
+                                        continue
+                                    members.add(username)
+                                    grp["members"] = list(members)
+                                    self.groups[gid] = grp
+                                    self.save_groups()
+                                    self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
+                                    self.send_user_groups(client, username)
+                                    self.send_group_message_history(client, username)
                             # broadcast to group members
                             msg_id = secrets.token_hex(12)
                             data = {
@@ -2360,6 +2603,115 @@ class MAXutkoServer:
                                 acc["profile"] = profile
                                 self.accounts[target] = acc
                                 self.save_accounts()
+                            continue
+                        if action == "admin_list_users":
+                            requester = self._refresh_account_clan_for_user(username)
+                            if not requester or self._get_account_clan(requester) != "Одмен":
+                                self._safe_send_json(client, {
+                                    "type": "admin_users",
+                                    "status": "error",
+                                    "message": "Недостаточно прав"
+                                })
+                                continue
+                            payload = self._build_admin_users_payload()
+                            self._safe_send_json(client, payload)
+                            continue
+                        if action == "admin_delete_user":
+                            target = (msg.get("username") or "").strip()
+                            requester = self._refresh_account_clan_for_user(username)
+                            if not requester or self._get_account_clan(requester) != "Одмен":
+                                self._safe_send_json(client, {
+                                    "type": "admin_delete_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "message": "Недостаточно прав"
+                                })
+                                continue
+                            if not target:
+                                self._safe_send_json(client, {
+                                    "type": "admin_delete_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "message": "Пользователь не найден"
+                                })
+                                continue
+                            if target == username:
+                                self._safe_send_json(client, {
+                                    "type": "admin_delete_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "message": "Нельзя удалить текущий аккаунт"
+                                })
+                                continue
+                            deleted, message = self._delete_account(target)
+                            if deleted:
+                                self.send_all_contacts()
+                                self._safe_send_json(client, {
+                                    "type": "admin_delete_result",
+                                    "status": "ok",
+                                    "username": target
+                                })
+                            else:
+                                self._safe_send_json(client, {
+                                    "type": "admin_delete_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "message": message or "Не удалось удалить пользователя"
+                                })
+                            continue
+                        if action == "admin_set_deactivated":
+                            target = (msg.get("username") or "").strip()
+                            deactivated = bool(msg.get("deactivated", False))
+                            requester = self._refresh_account_clan_for_user(username)
+                            if not requester or self._get_account_clan(requester) != "Одмен":
+                                self._safe_send_json(client, {
+                                    "type": "admin_deactivate_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "deactivated": deactivated,
+                                    "message": "Недостаточно прав"
+                                })
+                                continue
+                            if not target:
+                                self._safe_send_json(client, {
+                                    "type": "admin_deactivate_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "deactivated": deactivated,
+                                    "message": "Пользователь не найден"
+                                })
+                                continue
+                            if target == username:
+                                self._safe_send_json(client, {
+                                    "type": "admin_deactivate_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "deactivated": deactivated,
+                                    "message": "Нельзя изменять текущий аккаунт"
+                                })
+                                continue
+                            with self.accounts_lock:
+                                acc = self.accounts.get(target)
+                            if not acc:
+                                self._safe_send_json(client, {
+                                    "type": "admin_deactivate_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "deactivated": deactivated,
+                                    "message": "Пользователь не найден"
+                                })
+                                continue
+                            if deactivated:
+                                self._set_account_block(target, "deactivated")
+                            else:
+                                self._clear_account_block(target)
+                            self.send_all_contacts()
+                            self._safe_send_json(client, {
+                                "type": "admin_deactivate_result",
+                                "status": "ok",
+                                "username": target,
+                                "deactivated": deactivated
+                            })
                             continue
 
                     delete_msg_id = msg.get("delete_message")

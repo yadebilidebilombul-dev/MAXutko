@@ -859,7 +859,13 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self._scroll_was_at_bottom = True  # Сохраняет позицию скролла
         self._skip_next_scroll = False  # Флаг для избежания скролла при переключении чатов
         self._last_rendered_count = 0  # Количество отрендёренных сообщений в текущем виде
+        self.history_batch_size = 200
+        self._history_jobs = []
+        self._history_job_active = False
+        self._loading_chat_keys = set()
+        self._loading_placeholder_chat_key = None
         self.groups = {}
+        self.admin_users_cache = []
         self.my_clan_primary = ""
         self.my_clan_secondary = ""
         self.clans = list(CLANS)
@@ -883,6 +889,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.empty_state_label = None
         self.pending_contact_adds = set()
         self.reply_to_id = None
+        self._add_account_flow_active = False
+        self._add_account_return_account = None
         self.upload_states = {}
         self.upload_states_lock = threading.Lock()
         self.download_states = {}
@@ -950,6 +958,20 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _build_login_page(self):
         root_layout = QtWidgets.QVBoxLayout(self.login_page)
         root_layout.setContentsMargins(0, 0, 0, 0)
+
+        header_row = QtWidgets.QWidget()
+        header_layout = QtWidgets.QHBoxLayout(header_row)
+        header_layout.setContentsMargins(16, 16, 16, 0)
+        header_layout.setSpacing(0)
+        self.login_back_btn = QtWidgets.QPushButton("←")
+        self.login_back_btn.setObjectName("circleBackButton")
+        self.login_back_btn.setFixedSize(28, 28)
+        self.login_back_btn.setToolTip("Назад")
+        self.login_back_btn.clicked.connect(self._cancel_add_account)
+        self.login_back_btn.setVisible(False)
+        header_layout.addWidget(self.login_back_btn, 0, QtCore.Qt.AlignLeft)
+        header_layout.addStretch(1)
+        root_layout.addWidget(header_row, 0, QtCore.Qt.AlignTop)
 
         self.login_content = QtWidgets.QWidget()
         content_layout = QtWidgets.QVBoxLayout(self.login_content)
@@ -1345,6 +1367,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.accounts_btn.clicked.connect(self._show_accounts_menu)
         buttons_layout.addWidget(self.accounts_btn, 0, QtCore.Qt.AlignRight)
 
+        self.admin_panel_btn = QtWidgets.QPushButton("Админ - панель")
+        self.admin_panel_btn.setObjectName("ghostButton")
+        self.admin_panel_btn.clicked.connect(self._show_admin_panel)
+        self.admin_panel_btn.setVisible(False)
+        buttons_layout.addWidget(self.admin_panel_btn, 0, QtCore.Qt.AlignRight)
+
         self.disconnect_btn = QtWidgets.QPushButton("Выйти")
         self.disconnect_btn.setObjectName("dangerButton")
         self.disconnect_btn.clicked.connect(self.disconnect)
@@ -1532,11 +1560,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.chat_content,
             modal_size=QtCore.QSize(340, 200)
         )
+        self.admin_overlay = OverlayController(
+            self.chat_page,
+            self.chat_content,
+            modal_size=QtCore.QSize(780, 520)
+        )
         self._build_settings_overlay()
         self._build_passcode_overlay()
         self._build_delete_confirmation_overlay()
         self._build_create_group_overlay()
         self._build_group_info_overlay()
+        self._build_admin_panel_overlay()
         self._init_notifications()
 
     def _labeled(self, text, widget):
@@ -1943,6 +1977,67 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
         self.group_info_overlay.set_content(panel)
 
+    def _build_admin_panel_overlay(self):
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(12, 6, 12, 12)
+        layout.setSpacing(10)
+
+        title = QtWidgets.QLabel("Админ-панель")
+        title_font = QtGui.QFont("Segoe UI", 13, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        subtitle = QtWidgets.QLabel("Все зарегистрированные пользователи")
+        subtitle.setObjectName("mutedLabel")
+        layout.addWidget(subtitle)
+
+        header_row = QtWidgets.QHBoxLayout()
+        self.admin_users_count_label = QtWidgets.QLabel("Всего: 0")
+        self.admin_users_count_label.setObjectName("mutedLabel")
+        header_row.addWidget(self.admin_users_count_label)
+        header_row.addStretch(1)
+        self.admin_refresh_btn = QtWidgets.QPushButton("Обновить")
+        self.admin_refresh_btn.setObjectName("ghostButton")
+        self.admin_refresh_btn.clicked.connect(self._request_admin_users)
+        header_row.addWidget(self.admin_refresh_btn)
+        layout.addLayout(header_row)
+
+        self.admin_users_status = QtWidgets.QLabel("")
+        self.admin_users_status.setObjectName("mutedLabel")
+        self.admin_users_status.setVisible(False)
+        layout.addWidget(self.admin_users_status)
+
+        self.admin_users_table = QtWidgets.QTableWidget(0, 6)
+        self.admin_users_table.setObjectName("adminUsersTable")
+        self.admin_users_table.setHorizontalHeaderLabels([
+            "Пользователь",
+            "Почтовый адрес",
+            "Регистрация",
+            "Статус",
+            "",
+            ""
+        ])
+        self.admin_users_table.verticalHeader().setVisible(False)
+        self.admin_users_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.admin_users_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.admin_users_table.setAlternatingRowColors(True)
+        self.admin_users_table.setShowGrid(False)
+        self.admin_users_table.setWordWrap(False)
+        header = self.admin_users_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeToContents)
+        self.admin_users_table.setColumnWidth(4, 140)
+        self.admin_users_table.setColumnWidth(5, 110)
+        layout.addWidget(self.admin_users_table, 1)
+
+        self.admin_overlay.set_content(panel)
+
     def _show_delete_confirmation(self):
         if not getattr(self, "delete_confirmation_overlay", None):
             return
@@ -2039,6 +2134,180 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _close_group_info_overlay(self):
         if getattr(self, "group_info_overlay", None):
             self.group_info_overlay.hide()
+        if getattr(self, "admin_overlay", None):
+            self.admin_overlay.hide()
+
+    def _show_admin_panel(self):
+        if not self._is_admin():
+            return
+        if not getattr(self, "admin_overlay", None):
+            return
+        self._request_admin_users()
+        self.admin_overlay.show()
+
+    def _request_admin_users(self):
+        if not self._is_admin():
+            return
+        self._set_admin_status("Загрузка...")
+        self._send_action({"action": "admin_list_users"})
+
+    def _set_admin_status(self, text):
+        if not getattr(self, "admin_users_status", None):
+            return
+        if text:
+            self.admin_users_status.setText(text)
+            self.admin_users_status.setVisible(True)
+        else:
+            self.admin_users_status.setText("")
+            self.admin_users_status.setVisible(False)
+
+    def _apply_admin_users(self, data):
+        status = (data.get("status") or "").strip().lower()
+        if status != "ok":
+            message = data.get("message", "Не удалось загрузить пользователей")
+            self._set_admin_status(message)
+            return
+        users = data.get("users") or []
+        if not isinstance(users, list):
+            users = []
+        self.admin_users_cache = users
+        self._render_admin_users_table()
+
+    def _render_admin_users_table(self):
+        if not getattr(self, "admin_users_table", None):
+            return
+        users = list(self.admin_users_cache or [])
+        if not users:
+            self.admin_users_table.setRowCount(0)
+            self.admin_users_count_label.setText("Всего: 0")
+            self._set_admin_status("Пользователей нет")
+            return
+
+        self._set_admin_status("")
+        self.admin_users_table.clearContents()
+        self.admin_users_table.setRowCount(len(users))
+        self.admin_users_count_label.setText(f"Всего: {len(users)}")
+
+        for row, item in enumerate(users):
+            username = (item.get("username") or "").strip()
+            email = (item.get("email") or "").strip()
+            registered_at = item.get("registered_at", 0)
+            deactivated = bool(item.get("deactivated", False))
+
+            user_item = QtWidgets.QTableWidgetItem(username)
+            user_item.setToolTip(username)
+            self.admin_users_table.setItem(row, 0, user_item)
+
+            email_item = QtWidgets.QTableWidgetItem(email)
+            email_item.setToolTip(email)
+            self.admin_users_table.setItem(row, 1, email_item)
+
+            age_text = self._format_registered_age(registered_at)
+            reg_item = QtWidgets.QTableWidgetItem(age_text)
+            tooltip = self._format_timestamp_full(registered_at)
+            if tooltip:
+                reg_item.setToolTip(tooltip)
+            self.admin_users_table.setItem(row, 2, reg_item)
+
+            status_text = "деактивирован" if deactivated else "активен"
+            status_item = QtWidgets.QTableWidgetItem(status_text)
+            self.admin_users_table.setItem(row, 3, status_item)
+
+            toggle_label = "Активировать" if deactivated else "Деактивировать"
+            toggle_btn = QtWidgets.QPushButton(toggle_label)
+            toggle_btn.setObjectName("ghostButton" if deactivated else "dangerButton")
+            toggle_btn.setFixedHeight(26)
+            if username == self.username:
+                toggle_btn.setEnabled(False)
+                toggle_btn.setToolTip("Нельзя изменять текущий аккаунт")
+            toggle_btn.clicked.connect(
+                lambda _=None, u=username, activate=deactivated: self._confirm_admin_toggle(u, activate)
+            )
+            self.admin_users_table.setCellWidget(row, 4, toggle_btn)
+
+            delete_btn = QtWidgets.QPushButton("Удалить")
+            delete_btn.setObjectName("dangerButton")
+            delete_btn.setFixedHeight(26)
+            if username == self.username:
+                delete_btn.setEnabled(False)
+                delete_btn.setToolTip("Нельзя удалить текущий аккаунт")
+            delete_btn.clicked.connect(lambda _=None, u=username: self._confirm_admin_delete(u))
+            self.admin_users_table.setCellWidget(row, 5, delete_btn)
+
+        self.admin_users_table.resizeRowsToContents()
+
+    def _confirm_admin_delete(self, username):
+        username = (username or "").strip()
+        if not username or username == self.username:
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Удаление аккаунта",
+            f"Удалить аккаунт пользователя {username}?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        self._send_action({"action": "admin_delete_user", "username": username})
+
+    def _confirm_admin_toggle(self, username, activate):
+        username = (username or "").strip()
+        if not username or username == self.username:
+            return
+        title = "Активация аккаунта" if activate else "Деактивация аккаунта"
+        action_text = "Активировать" if activate else "Деактивировать"
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            title,
+            f"{action_text} аккаунт пользователя {username}?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        self._send_action({
+            "action": "admin_set_deactivated",
+            "username": username,
+            "deactivated": not activate
+        })
+
+    def _handle_admin_delete_result(self, data):
+        status = (data.get("status") or "").strip().lower()
+        username = (data.get("username") or "").strip()
+        if status == "ok":
+            QtWidgets.QMessageBox.information(
+                self,
+                "Удаление аккаунта",
+                f"Аккаунт пользователя {username} удален"
+            )
+            self._request_admin_users()
+            return
+        message = data.get("message", "Не удалось удалить аккаунт")
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Удаление аккаунта",
+            message
+        )
+
+    def _handle_admin_deactivate_result(self, data):
+        status = (data.get("status") or "").strip().lower()
+        username = (data.get("username") or "").strip()
+        deactivated = bool(data.get("deactivated", False))
+        if status == "ok":
+            title = "Деактивация аккаунта" if deactivated else "Активация аккаунта"
+            QtWidgets.QMessageBox.information(
+                self,
+                title,
+                f"Аккаунт пользователя {username} "
+                f"{'деактивирован' if deactivated else 'активирован'}"
+            )
+            self._request_admin_users()
+            return
+        message = data.get("message", "Не удалось изменить доступ")
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Доступ к аккаунту",
+            message
+        )
 
     def _leave_group(self, gid):
         gid = (gid or "").strip()
@@ -2328,8 +2597,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.activateWindow()
         self.set_chat_mode("dm", sender)
 
-    def show_login_screen(self, status_text=""):
+    def show_login_screen(self, status_text="", show_add_back=False):
         self.status_label.setText(status_text)
+        self._add_account_flow_active = bool(show_add_back)
+        if getattr(self, "login_back_btn", None):
+            self.login_back_btn.setVisible(self._add_account_flow_active)
         if getattr(self, "settings_overlay", None):
             self.settings_overlay.hide()
         if getattr(self, "profile_overlay", None):
@@ -2363,8 +2635,16 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.search_query = ""
         self.latest_users = []
         self.user_directory = {}
+        self.groups = {}
+        self.my_clan_primary = ""
+        self.my_clan_secondary = ""
+        self._sync_admin_visibility()
         self.pending_contact_adds = set()
         self.users_search.clear()
+        if getattr(self, "users_list", None):
+            self.users_list.clear()
+        if getattr(self, "empty_state_label", None):
+            self.empty_state_label.setVisible(False)
         with self.upload_states_lock:
             for state in self.upload_states.values():
                 try:
@@ -2401,6 +2681,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.profile_overlay.hide()
         if getattr(self, "group_info_overlay", None):
             self.group_info_overlay.hide()
+        if getattr(self, "admin_overlay", None):
+            self.admin_overlay.hide()
 
     def show_reset_step1_screen(self):
         self.reset_status_label.setText("")
@@ -2419,6 +2701,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def show_chat_screen(self):
         self._update_user_label()
+        self._sync_admin_visibility()
         self.stack.setCurrentWidget(self.chat_page)
         self.set_chat_mode("group")
 
@@ -2825,6 +3108,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _is_admin(self):
         return (self.my_clan_primary or "").strip() == "Одмен"
 
+    def _sync_admin_visibility(self):
+        if getattr(self, "admin_panel_btn", None):
+            self.admin_panel_btn.setVisible(self._is_admin())
+
     def _update_clan_badges(self, clan_primary, clan_secondary):
         primary = (clan_primary or "").strip()
         secondary = (clan_secondary or "").strip()
@@ -2889,9 +3176,22 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.profile_overlay.show()
 
     def _add_account_flow(self):
+        self._add_account_return_account = self._get_active_account()
+        if not self._add_account_return_account and self.username:
+            self._add_account_return_account = self._find_saved_account(self.username)
         self._disconnect_internal(show_login=False)
-        self.show_login_screen("Войдите в новый аккаунт")
+        self.show_login_screen("Войдите в новый аккаунт", show_add_back=True)
         self.remember_checkbox.setChecked(True)
+
+    def _cancel_add_account(self):
+        account = self._add_account_return_account or {}
+        self._add_account_return_account = None
+        self._add_account_flow_active = False
+        if account.get("token"):
+            self.show_login_screen("Возврат...")
+            self._attempt_token_login_with(account.get("token"), account.get("username"), "Возврат...")
+        else:
+            self.show_login_screen()
 
     def _switch_account(self, username):
         account = self._find_saved_account(username)
@@ -3354,6 +3654,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             elif self.chat_mode == "group_chat" and self.group_chat_target:
                 payload["action"] = "send_group_message"
                 payload["group_id"] = self.group_chat_target
+            elif self.chat_mode == "group_chat":
+                QtWidgets.QMessageBox.warning(self, "Группа", "Не выбрана группа для отправки")
+                return
             self._send_action(payload)
             self.message_input.clear()
             self._clear_reply()
@@ -3510,6 +3813,44 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if idx == 0:
             return f"{int(size)} {units[idx]}"
         return f"{size:.1f} {units[idx]}"
+
+    def _format_registered_age(self, value):
+        try:
+            ts = int(value)
+        except Exception:
+            return "—"
+        if ts <= 0:
+            return "—"
+        now = int(time.time())
+        diff = max(0, now - ts)
+        if diff < 60:
+            return "только что"
+        minutes = diff // 60
+        if minutes < 60:
+            return f"{minutes} мин назад"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours} ч назад"
+        days = hours // 24
+        if days < 30:
+            return f"{days} дн назад"
+        months = days // 30
+        if months < 12:
+            return f"{months} мес назад"
+        years = months // 12
+        return f"{years} г назад"
+
+    def _format_timestamp_full(self, value):
+        try:
+            ts = int(value)
+        except Exception:
+            return ""
+        if ts <= 0:
+            return ""
+        try:
+            return time.strftime("%d.%m.%Y %H:%M", time.localtime(ts))
+        except Exception:
+            return ""
 
     def _format_timestamp_hm(self, value):
         if not value:
@@ -3947,10 +4288,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self._handle_passcode_response(data)
             return
         if data.get("type") == "history":
-            items = data.get("items", [])
-            for item in items:
-                if isinstance(item, dict):
-                    self.display_message(item, _depth + 1)
+            self._enqueue_history_job("history", data.get("items", []))
             return
         if data.get("type") == "session":
             username = (data.get("username") or "").strip()
@@ -3961,22 +4299,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                     self._render_conversation()
             return
         if data.get("type") == "dm_history":
-            items = data.get("items", [])
-            # Проверяем есть ли уже кэшированная история
-            dm_key = f"dm:{self.dm_target}" if self.dm_target else None
-            history_exists = dm_key and dm_key in self.conversations and len(self.conversations[dm_key]) > 0
-            
-            for item in items:
-                if isinstance(item, dict):
-                    self._store_message(item)
-            self._rebuild_unread_counts()
-            if self.latest_users:
-                self._render_users_list()
-            if self.chat_mode == "dm":
-                # Если история уже была загружена, просто рендерим инкрементально
-                # Если это первая загрузка - то _render_conversation сама разберёт
-                self._render_conversation()
-                self._send_read_receipts_for_current()
+            self._enqueue_history_job("dm_history", data.get("items", []))
             return
         if data.get("type") == "dm_receipt":
             self._apply_receipt(data)
@@ -3988,10 +4311,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self._load_user_groups(data.get("groups", []))
             return
         if data.get("type") == "group_messages":
-            items = data.get("items", [])
-            for item in items:
-                if isinstance(item, dict):
-                    self._store_message(item)
+            self._enqueue_history_job("group_messages", data.get("items", []))
             return
         if data.get("type") == "search_results":
             self._apply_search_results(data)
@@ -4036,8 +4356,19 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 self._add_group_to_contacts(gid, grp)
                 self._build_group_created_overlay(f"Вы вступили в группу '{grp.get('name', '')}'")
                 self.group_created_overlay.show()
+                self.set_chat_mode("group_chat", group_id=gid)
             else:
                 QtWidgets.QMessageBox.warning(self, "Ошибка", data.get("message", "Не удалось вступить в группу"))
+            return
+        if data.get("type") == "group_message_reject":
+            gid = (data.get("group_id") or "").strip()
+            gname = self._group_display_name(gid) if gid else ""
+            reason = (data.get("message") or "").strip() or "Не удалось отправить сообщение"
+            if gname:
+                reason = f"{reason} (Группа: {gname})"
+            QtWidgets.QMessageBox.warning(self, "Группа", reason)
+            if gid and self.chat_mode == "group_chat" and self.group_chat_target == gid:
+                self._render_message({"type": "system", "message": reason})
             return
         if data.get("type") == "group_left":
             status = (data.get("status") or "").strip()
@@ -4090,6 +4421,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                     self.my_clan_secondary = new_secondary
                     for dlg in list(self.profile_dialogs.values()):
                         dlg.set_admin(self._is_admin())
+                self._sync_admin_visibility()
                 self._update_user_label()
             if self.latest_users:
                 self._render_users_list()
@@ -4099,6 +4431,15 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             dialog = self.profile_dialogs.get(username)
             if dialog:
                 dialog.set_note(data.get("note", ""))
+            return
+        if data.get("type") == "admin_users":
+            self._apply_admin_users(data)
+            return
+        if data.get("type") == "admin_delete_result":
+            self._handle_admin_delete_result(data)
+            return
+        if data.get("type") == "admin_deactivate_result":
+            self._handle_admin_deactivate_result(data)
             return
         if data.get("type") == "file_upload_ready":
             self._handle_upload_ready(data)
@@ -4404,15 +4745,112 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return gid == self.group_chat_target
         return self.chat_mode == "group"
 
+    def _get_current_chat_key(self):
+        if self.chat_mode == "group":
+            return "group"
+        if self.chat_mode == "group_chat" and self.group_chat_target:
+            return f"group:{self.group_chat_target}"
+        if self.chat_mode == "dm" and self.dm_target:
+            return f"dm:{self.dm_target}"
+        return ""
+
+    def _is_chat_loading(self, chat_key):
+        if not chat_key:
+            return False
+        if chat_key in self._loading_chat_keys:
+            return True
+        if chat_key.startswith("dm:") and "dm:*" in self._loading_chat_keys:
+            return True
+        if chat_key.startswith("group:") and "group:*" in self._loading_chat_keys:
+            return True
+        return False
+
+    def _show_loading_message(self, chat_key):
+        if not chat_key:
+            return
+        if self._loading_placeholder_chat_key == chat_key:
+            return
+        self._clear_messages()
+        self._loading_placeholder_chat_key = chat_key
+        self._render_message({"type": "system", "message": "Загрузка. Подождите"})
+        QtCore.QTimer.singleShot(5, self._scroll_to_bottom)
+
+    def _set_loading_flag(self, kind, enabled):
+        if kind == "history":
+            key = "group"
+        elif kind == "dm_history":
+            key = "dm:*"
+        elif kind == "group_messages":
+            key = "group:*"
+        else:
+            return
+        if enabled:
+            self._loading_chat_keys.add(key)
+        else:
+            self._loading_chat_keys.discard(key)
+
+    def _enqueue_history_job(self, kind, items):
+        if not isinstance(items, list) or not items:
+            self._finalize_history_job(kind)
+            return
+        self._set_loading_flag(kind, True)
+        self._history_jobs.append({"kind": kind, "items": items, "idx": 0})
+        current_key = self._get_current_chat_key()
+        if self._is_chat_loading(current_key):
+            self._show_loading_message(current_key)
+        if not self._history_job_active:
+            self._history_job_active = True
+            QtCore.QTimer.singleShot(0, self._process_history_jobs)
+
+    def _process_history_jobs(self):
+        if not self._history_jobs:
+            self._history_job_active = False
+            return
+        job = self._history_jobs[0]
+        items = job.get("items") or []
+        idx = int(job.get("idx", 0))
+        end = min(idx + self.history_batch_size, len(items))
+        for i in range(idx, end):
+            item = items[i]
+            if isinstance(item, dict):
+                self._store_message(item)
+        job["idx"] = end
+        if end >= len(items):
+            self._history_jobs.pop(0)
+            self._finalize_history_job(job.get("kind"))
+            if not self._history_jobs:
+                self._history_job_active = False
+                return
+        QtCore.QTimer.singleShot(0, self._process_history_jobs)
+
+    def _finalize_history_job(self, kind):
+        self._set_loading_flag(kind, False)
+        if kind == "dm_history":
+            self._rebuild_unread_counts()
+            if self.latest_users:
+                self._render_users_list()
+            if self.chat_mode == "dm":
+                self._render_conversation()
+                self._send_read_receipts_for_current()
+        elif kind == "history":
+            if self.chat_mode == "group":
+                self._render_conversation()
+        elif kind == "group_messages":
+            if self.chat_mode == "group_chat":
+                self._render_conversation()
+        current_key = self._get_current_chat_key()
+        if current_key and not self._is_chat_loading(current_key):
+            self._loading_placeholder_chat_key = None
+
     def _render_conversation(self):
         """Умная отрисовка с инкрементальным обновлением"""
         # Определяем ключ текущего чата
-        if self.chat_mode == "group":
-            chat_key = "group"
-        elif self.chat_mode == "group_chat" and self.group_chat_target:
-            chat_key = f"group:{self.group_chat_target}"
-        else:
-            chat_key = f"dm:{self.dm_target}"
+        chat_key = self._get_current_chat_key()
+        if self._is_chat_loading(chat_key):
+            self._show_loading_message(chat_key)
+            return
+        if self._loading_placeholder_chat_key == chat_key:
+            self._loading_placeholder_chat_key = None
         
         items = self.conversations.get(chat_key, [])
         
@@ -5326,6 +5764,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.passcode_login_overlay.resize(self.login_page.rect())
         if getattr(self, "group_info_overlay", None):
             self.group_info_overlay.resize(self.chat_page.rect())
+        if getattr(self, "admin_overlay", None):
+            self.admin_overlay.resize(self.chat_page.rect())
 
     def _show_settings_overlay(self):
         if getattr(self, "settings_overlay", None):
