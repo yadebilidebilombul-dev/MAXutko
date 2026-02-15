@@ -62,7 +62,7 @@ def fetch_messages(token):
     payload = {
         "action": "bot_fetch",
         "token": token,
-        "command": "вышли все накопившиеся"
+        "command": "checkOut"
     }
     return send_request(payload)
 

@@ -248,7 +248,7 @@ class BotAPI:
             return
 
         command = (payload.get("command") or payload.get("text") or "").strip()
-        if command.casefold() != "\u0432\u044b\u0448\u043b\u0438 \u0432\u0441\u0435 \u043d\u0430\u043a\u043e\u043f\u0438\u0432\u0448\u0438\u0435\u0441\u044f".casefold():
+        if command != "checkOut":
             self._send_bot_response(client, "bot_fetch", "error", "\u041d\u0435\u0432\u0435\u0440\u043d\u0430\u044f \u043a\u043e\u043c\u0430\u043d\u0434\u0430")
             return
 
