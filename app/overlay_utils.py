@@ -184,10 +184,18 @@ class OverlayController(QtCore.QObject):
             self._create_blur_effect()
 
         # Анимация размытия фона
-        blur_anim = QtCore.QPropertyAnimation(self._blur_effect, b"blurRadius", self)
-        blur_anim.setDuration(180)
-        blur_anim.setStartValue(self._blur_effect.blurRadius() if self._blur_effect else 0)
-        blur_anim.setEndValue(self.blur_radius if show else 0)
+        blur_effect = self._blur_effect
+        if blur_effect is not None:
+            try:
+                start_value = blur_effect.blurRadius()
+            except RuntimeError:
+                blur_effect = None
+                self._blur_effect = None
+        if blur_effect is not None:
+            blur_anim = QtCore.QPropertyAnimation(blur_effect, b"blurRadius", self)
+            blur_anim.setDuration(180)
+            blur_anim.setStartValue(start_value)
+            blur_anim.setEndValue(self.blur_radius if show else 0)
 
         # Анимация прозрачности модального окна
         opacity_anim = QtCore.QPropertyAnimation(self._opacity_effect, b"opacity", self)
@@ -202,7 +210,10 @@ class OverlayController(QtCore.QObject):
         geom_anim.setEndValue(self._final_rect() if show else self._start_rect())
 
         # Добавляем все анимации в группу
-        for anim in (blur_anim, opacity_anim, geom_anim):
+        if blur_effect is not None:
+            blur_anim.setEasingCurve(QtCore.QEasingCurve.OutCubic if show else QtCore.QEasingCurve.InCubic)
+            self._anim_group.addAnimation(blur_anim)
+        for anim in (opacity_anim, geom_anim):
             anim.setEasingCurve(QtCore.QEasingCurve.OutCubic if show else QtCore.QEasingCurve.InCubic)
             self._anim_group.addAnimation(anim)
 

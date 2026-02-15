@@ -1,1 +1,6 @@
-{}
+{
+  "test": {
+    "status": "spam_warn",
+    "timestamp": 1771185529
+  }
+}

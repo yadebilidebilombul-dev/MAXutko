@@ -463,6 +463,17 @@ class MAXutkoServer:
                 self.save_accounts()
             return acc
 
+    def _is_admin_account(self, username):
+        if not username:
+            return False
+        with self.accounts_lock:
+            acc = self.accounts.get(username)
+        if not isinstance(acc, dict):
+            return False
+        profile = acc.get("profile") or {}
+        clan_primary = (profile.get("clan_primary") or "").strip()
+        return clan_primary == "Одмен"
+
 
     def save_accounts(self):
 
@@ -1113,7 +1124,11 @@ class MAXutkoServer:
         return ""
 
     def _is_account_blocked(self, username):
-        return bool(self._account_block_status(username))
+        status = self._account_block_status(username)
+        return status in ("deactivated", "deleted")
+
+    def _is_spam_warned(self, username):
+        return self._account_block_status(username) == "spam_warn"
 
     def _set_account_block(self, username, status):
         username = (username or "").strip()
@@ -1127,9 +1142,10 @@ class MAXutkoServer:
             }
             self.save_account_blocks()
 
-        sock = self._socket_by_username(username)
-        if sock:
-            self.remove_client(sock)
+        if status in ("deactivated", "deleted"):
+            sock = self._socket_by_username(username)
+            if sock:
+                self.remove_client(sock)
         return True
 
     def _clear_account_block(self, username):
@@ -1411,6 +1427,12 @@ class MAXutkoServer:
                 self.contacts[user_b] = b_list
             self.save_contacts()
 
+    def _has_contact(self, user_a, user_b):
+        if not user_a or not user_b:
+            return False
+        with self.contacts_lock:
+            return user_b in self.contacts.get(user_a, [])
+
     def _build_contacts_payload(self, username):
         with self.contacts_lock:
             contacts = list(self.contacts.get(username, []))
@@ -1500,6 +1522,22 @@ class MAXutkoServer:
             payload = {
                 "type": "group_messages",
                 "items": items
+            }
+            self._safe_send_json(client, payload)
+
+    def send_pending_group_invites(self, client, username):
+        """Send pending group invites for user"""
+        pending = []
+        with self.groups_lock:
+            for gid, grp in self.groups.items():
+                invites = set(grp.get("invites") or [])
+                if username in invites:
+                    pending.append(grp)
+        for grp in pending:
+            payload = {
+                "type": "group_invite",
+                "from": grp.get("owner", ""),
+                "group": grp
             }
             self._safe_send_json(client, payload)
 
@@ -1693,12 +1731,14 @@ class MAXutkoServer:
                 status = (entry.get("status") or "").strip()
             elif isinstance(entry, str):
                 status = entry.strip()
-            deactivated = bool(status)
+            deactivated = status in ("deactivated", "deleted")
+            spam_warned = status == "spam_warn"
             users.append({
                 "username": name,
                 "email": email,
                 "registered_at": registered_at,
-                "deactivated": deactivated
+                "deactivated": deactivated,
+                "spam_warned": spam_warned
             })
 
         users.sort(key=lambda x: (x.get("username") or "").casefold())
@@ -2222,6 +2262,7 @@ class MAXutkoServer:
             self.send_user_groups(client, username)
             self.send_contacts(client, username)
             self.send_group_message_history(client, username)
+            self.send_pending_group_invites(client, username)
 
             self.send_system(f"{username} joined the chat")
             self.send_all_contacts()
@@ -2438,16 +2479,36 @@ class MAXutkoServer:
                             gid = (msg.get("group_id") or "").strip()
                             target = (msg.get("username") or "").strip()
                             if not gid or not target:
+                                self._safe_send_json(client, {
+                                    "type": "group_invite_result",
+                                    "status": "error",
+                                    "message": "Некорректные данные приглашения"
+                                })
                                 continue
                             with self.groups_lock:
                                 grp = self.groups.get(gid)
                                 if not grp:
+                                    self._safe_send_json(client, {
+                                        "type": "group_invite_result",
+                                        "status": "error",
+                                        "message": "Группа не найдена"
+                                    })
                                     continue
                                 members = set(grp.get("members") or [])
                                 if username not in members:
+                                    self._safe_send_json(client, {
+                                        "type": "group_invite_result",
+                                        "status": "error",
+                                        "message": "Недостаточно прав для приглашения"
+                                    })
                                     continue
                                 invites = set(grp.get("invites") or [])
                                 if target in members or target in invites:
+                                    self._safe_send_json(client, {
+                                        "type": "group_invite_result",
+                                        "status": "error",
+                                        "message": "Пользователь уже в группе или уже приглашен"
+                                    })
                                     continue
                                 invites.add(target)
                                 grp["invites"] = list(invites)
@@ -2458,6 +2519,12 @@ class MAXutkoServer:
                             payload = {"type": "group_invite", "from": username, "group": grp}
                             if target_sock:
                                 self._safe_send_json(target_sock, payload)
+                            self._safe_send_json(client, {
+                                "type": "group_invite_result",
+                                "status": "ok",
+                                "group_id": gid,
+                                "username": target
+                            })
                             continue
                         if action == "accept_group_invite":
                             gid = (msg.get("group_id") or "").strip()
@@ -2541,6 +2608,14 @@ class MAXutkoServer:
                         if action == "add_contact":
                             target = (msg.get("username") or "").strip()
                             if target and target != username:
+                                if self._is_spam_warned(username) and not self._has_contact(username, target):
+                                    self._safe_send_json(client, {
+                                        "type": "add_contact_result",
+                                        "status": "error",
+                                        "username": target,
+                                        "message": "Вы не можете писать новым пользователям и добавлять их в контакты. Если вы считаете, что это ошибка, свяжитесь с поддержкой: moro23728@gmail.com"
+                                    })
+                                    continue
                                 self._add_contact_pair(username, target)
                                 sender_sock = self._socket_by_username(username)
                                 target_sock = self._socket_by_username(target)
@@ -2605,8 +2680,7 @@ class MAXutkoServer:
                                 self.save_accounts()
                             continue
                         if action == "admin_list_users":
-                            requester = self._refresh_account_clan_for_user(username)
-                            if not requester or self._get_account_clan(requester) != "Одмен":
+                            if not self._is_admin_account(username):
                                 self._safe_send_json(client, {
                                     "type": "admin_users",
                                     "status": "error",
@@ -2618,8 +2692,7 @@ class MAXutkoServer:
                             continue
                         if action == "admin_delete_user":
                             target = (msg.get("username") or "").strip()
-                            requester = self._refresh_account_clan_for_user(username)
-                            if not requester or self._get_account_clan(requester) != "Одмен":
+                            if not self._is_admin_account(username):
                                 self._safe_send_json(client, {
                                     "type": "admin_delete_result",
                                     "status": "error",
@@ -2662,8 +2735,7 @@ class MAXutkoServer:
                         if action == "admin_set_deactivated":
                             target = (msg.get("username") or "").strip()
                             deactivated = bool(msg.get("deactivated", False))
-                            requester = self._refresh_account_clan_for_user(username)
-                            if not requester or self._get_account_clan(requester) != "Одмен":
+                            if not self._is_admin_account(username):
                                 self._safe_send_json(client, {
                                     "type": "admin_deactivate_result",
                                     "status": "error",
@@ -2713,6 +2785,69 @@ class MAXutkoServer:
                                 "deactivated": deactivated
                             })
                             continue
+                        if action == "admin_set_spam_warn":
+                            target = (msg.get("username") or "").strip()
+                            warned = bool(msg.get("warned", False))
+                            if not self._is_admin_account(username):
+                                self._safe_send_json(client, {
+                                    "type": "admin_warn_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "warned": warned,
+                                    "message": "Недостаточно прав"
+                                })
+                                continue
+                            if not target:
+                                self._safe_send_json(client, {
+                                    "type": "admin_warn_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "warned": warned,
+                                    "message": "Пользователь не найден"
+                                })
+                                continue
+                            if target == username:
+                                self._safe_send_json(client, {
+                                    "type": "admin_warn_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "warned": warned,
+                                    "message": "Нельзя изменять текущий аккаунт"
+                                })
+                                continue
+                            with self.accounts_lock:
+                                acc = self.accounts.get(target)
+                            if not acc:
+                                self._safe_send_json(client, {
+                                    "type": "admin_warn_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "warned": warned,
+                                    "message": "Пользователь не найден"
+                                })
+                                continue
+                            current_status = self._account_block_status(target)
+                            if warned:
+                                if current_status in ("deactivated", "deleted"):
+                                    self._safe_send_json(client, {
+                                        "type": "admin_warn_result",
+                                        "status": "error",
+                                        "username": target,
+                                        "warned": warned,
+                                        "message": "Аккаунт деактивирован"
+                                    })
+                                    continue
+                                self._set_account_block(target, "spam_warn")
+                            else:
+                                if current_status == "spam_warn":
+                                    self._clear_account_block(target)
+                            self._safe_send_json(client, {
+                                "type": "admin_warn_result",
+                                "status": "ok",
+                                "username": target,
+                                "warned": warned
+                            })
+                            continue
 
                     delete_msg_id = msg.get("delete_message")
                     if delete_msg_id:
@@ -2730,6 +2865,21 @@ class MAXutkoServer:
                     if isinstance(text, str) and len(text) > self.max_message_size:
                         # Reject oversized message
                         continue
+
+                    if self._is_spam_warned(username):
+                        if target:
+                            if not self._has_contact(username, target):
+                                self._safe_send_json(client, {
+                                    "type": "system",
+                                    "message": "Вам запрещено писать новым людям"
+                                })
+                                continue
+                        else:
+                            self._safe_send_json(client, {
+                                "type": "system",
+                                "message": "Вам запрещено писать в общий чат"
+                            })
+                            continue
 
                     if target:
                         self.send_direct_message(username, target, text, reply_to)

@@ -880,6 +880,9 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.settings_path = os.path.join(os.path.dirname(__file__), "settings.json")
         self.settings = self._load_settings()
         self.use_windows_notifications = bool(self.settings.get("windows_notifications", True))
+        self.theme = (self.settings.get("theme") or "light").strip().lower()
+        if self.theme not in ("light", "dark"):
+            self.theme = "light"
         self.notifier = None
         self.popup_notifier = None
         self.search_timer = QtCore.QTimer(self)
@@ -938,8 +941,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self._load_qss()
 
     def _load_qss(self):
+        preferred = "ui_dark.qss" if self.theme == "dark" else "ui.qss"
         base_dir = QtCore.QFileInfo(__file__).absolutePath()
         candidates = [
+            os.path.join(base_dir, preferred),
+            os.path.join(os.getcwd(), preferred),
+            os.path.join(os.getcwd(), "app", preferred),
             os.path.join(base_dir, "ui.qss"),
             os.path.join(os.getcwd(), "ui.qss"),
             os.path.join(os.getcwd(), "app", "ui.qss"),
@@ -954,6 +961,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                     print(f"Failed to load QSS: {qss_path} ({e})", file=sys.stderr)
                     return
         print("QSS not found. Tried: " + ", ".join(candidates), file=sys.stderr)
+        return
+
+    def _apply_theme(self, theme):
+        theme = (theme or "").strip().lower()
+        if theme not in ("light", "dark"):
+            theme = "light"
+        if getattr(self, "theme", "light") == theme:
+            return
+        self.theme = theme
+        self._load_qss()
+        self._save_settings()
 
     def _build_login_page(self):
         root_layout = QtWidgets.QVBoxLayout(self.login_page)
@@ -1565,6 +1583,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.chat_content,
             modal_size=QtCore.QSize(780, 520)
         )
+        self.admin_action_overlay = OverlayController(
+            self.chat_page,
+            self.chat_content,
+            modal_size=QtCore.QSize(360, 270)
+        )
         self._build_settings_overlay()
         self._build_passcode_overlay()
         self._build_delete_confirmation_overlay()
@@ -1600,6 +1623,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.settings_notifications_checkbox.setChecked(bool(self.use_windows_notifications))
         self.settings_notifications_checkbox.toggled.connect(self._set_windows_notifications)
         layout.addWidget(self.settings_notifications_checkbox)
+
+        self.settings_theme_checkbox = QtWidgets.QCheckBox("Темная тема")
+        self.settings_theme_checkbox.setChecked(self.theme == "dark")
+        self.settings_theme_checkbox.toggled.connect(self._set_theme)
+        layout.addWidget(self.settings_theme_checkbox)
 
         note = QtWidgets.QLabel(
             "Уведомления показываются при новом сообщении в личных сообщениях, когда окно свернуто. "
@@ -2008,14 +2036,13 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.admin_users_status.setVisible(False)
         layout.addWidget(self.admin_users_status)
 
-        self.admin_users_table = QtWidgets.QTableWidget(0, 6)
+        self.admin_users_table = QtWidgets.QTableWidget(0, 5)
         self.admin_users_table.setObjectName("adminUsersTable")
         self.admin_users_table.setHorizontalHeaderLabels([
             "Пользователь",
             "Почтовый адрес",
             "Регистрация",
             "Статус",
-            "",
             ""
         ])
         self.admin_users_table.verticalHeader().setVisible(False)
@@ -2031,12 +2058,90 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
         header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeToContents)
         self.admin_users_table.setColumnWidth(4, 140)
-        self.admin_users_table.setColumnWidth(5, 110)
         layout.addWidget(self.admin_users_table, 1)
 
         self.admin_overlay.set_content(panel)
+
+    def _build_admin_action_overlay(self, username, deactivated, spam_warned):
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(12, 6, 12, 12)
+        layout.setSpacing(10)
+
+        title = QtWidgets.QLabel("Действие")
+        title_font = QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        subtitle = QtWidgets.QLabel(f"Пользователь: {username}")
+        subtitle.setObjectName("mutedLabel")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        toggle_label = "Активировать" if deactivated else "Деактивировать"
+        toggle_btn = QtWidgets.QPushButton(toggle_label)
+        toggle_btn.setObjectName("ghostButton" if deactivated else "dangerButton")
+        toggle_btn.setFixedHeight(28)
+        toggle_btn.clicked.connect(
+            lambda _=None, u=username, activate=deactivated: self._run_admin_action(
+                lambda: self._confirm_admin_toggle(u, activate)
+            )
+        )
+        layout.addWidget(toggle_btn)
+
+        spam_label = "Снять варн спам" if spam_warned else "Варн спам"
+        spam_btn = QtWidgets.QPushButton(spam_label)
+        spam_btn.setObjectName("ghostButton" if spam_warned else "dangerButton")
+        spam_btn.setFixedHeight(28)
+        spam_btn.clicked.connect(
+            lambda _=None, u=username, warn=not spam_warned: self._run_admin_action(
+                lambda: self._confirm_admin_spam_warn(u, warn)
+            )
+        )
+        layout.addWidget(spam_btn)
+
+        delete_btn = QtWidgets.QPushButton("Удалить")
+        delete_btn.setObjectName("dangerButton")
+        delete_btn.setFixedHeight(28)
+        delete_btn.clicked.connect(
+            lambda _=None, u=username: self._run_admin_action(lambda: self._confirm_admin_delete(u))
+        )
+        layout.addWidget(delete_btn)
+
+        if username == self.username:
+            for btn in (toggle_btn, spam_btn, delete_btn):
+                btn.setEnabled(False)
+                btn.setToolTip("Нельзя изменять текущий аккаунт")
+
+        layout.addStretch(1)
+
+        close_btn = QtWidgets.QPushButton("Закрыть")
+        close_btn.setObjectName("ghostButton")
+        close_btn.clicked.connect(self._close_admin_action_overlay)
+        layout.addWidget(close_btn, 0, QtCore.Qt.AlignRight)
+
+        self.admin_action_overlay.set_content(panel)
+
+    def _show_admin_action_overlay(self, username, deactivated, spam_warned):
+        if not self._is_admin():
+            return
+        if not getattr(self, "admin_action_overlay", None):
+            return
+        username = (username or "").strip()
+        if not username:
+            return
+        self._build_admin_action_overlay(username, deactivated, spam_warned)
+        self.admin_action_overlay.show()
+
+    def _close_admin_action_overlay(self):
+        if getattr(self, "admin_action_overlay", None):
+            self.admin_action_overlay.hide()
+
+    def _run_admin_action(self, action_cb):
+        self._close_admin_action_overlay()
+        if action_cb:
+            action_cb()
 
     def _show_delete_confirmation(self):
         if not getattr(self, "delete_confirmation_overlay", None):
@@ -2136,6 +2241,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.group_info_overlay.hide()
         if getattr(self, "admin_overlay", None):
             self.admin_overlay.hide()
+        if getattr(self, "admin_action_overlay", None):
+            self.admin_action_overlay.hide()
 
     def _show_admin_panel(self):
         if not self._is_admin():
@@ -2193,6 +2300,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             email = (item.get("email") or "").strip()
             registered_at = item.get("registered_at", 0)
             deactivated = bool(item.get("deactivated", False))
+            spam_warned = bool(item.get("spam_warned", False))
 
             user_item = QtWidgets.QTableWidgetItem(username)
             user_item.setToolTip(username)
@@ -2209,30 +2317,25 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 reg_item.setToolTip(tooltip)
             self.admin_users_table.setItem(row, 2, reg_item)
 
-            status_text = "деактивирован" if deactivated else "активен"
+            if deactivated:
+                status_text = "деактивирован"
+            elif spam_warned:
+                status_text = "варн спам"
+            else:
+                status_text = "активен"
             status_item = QtWidgets.QTableWidgetItem(status_text)
             self.admin_users_table.setItem(row, 3, status_item)
 
-            toggle_label = "Активировать" if deactivated else "Деактивировать"
-            toggle_btn = QtWidgets.QPushButton(toggle_label)
-            toggle_btn.setObjectName("ghostButton" if deactivated else "dangerButton")
-            toggle_btn.setFixedHeight(26)
+            action_btn = QtWidgets.QPushButton("Действие")
+            action_btn.setObjectName("primaryButton")
+            action_btn.setFixedHeight(26)
             if username == self.username:
-                toggle_btn.setEnabled(False)
-                toggle_btn.setToolTip("Нельзя изменять текущий аккаунт")
-            toggle_btn.clicked.connect(
-                lambda _=None, u=username, activate=deactivated: self._confirm_admin_toggle(u, activate)
+                action_btn.setEnabled(False)
+                action_btn.setToolTip("Нельзя изменять текущий аккаунт")
+            action_btn.clicked.connect(
+                lambda _=None, u=username, d=deactivated, w=spam_warned: self._show_admin_action_overlay(u, d, w)
             )
-            self.admin_users_table.setCellWidget(row, 4, toggle_btn)
-
-            delete_btn = QtWidgets.QPushButton("Удалить")
-            delete_btn.setObjectName("dangerButton")
-            delete_btn.setFixedHeight(26)
-            if username == self.username:
-                delete_btn.setEnabled(False)
-                delete_btn.setToolTip("Нельзя удалить текущий аккаунт")
-            delete_btn.clicked.connect(lambda _=None, u=username: self._confirm_admin_delete(u))
-            self.admin_users_table.setCellWidget(row, 5, delete_btn)
+            self.admin_users_table.setCellWidget(row, 4, action_btn)
 
         self.admin_users_table.resizeRowsToContents()
 
@@ -2268,6 +2371,26 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             "action": "admin_set_deactivated",
             "username": username,
             "deactivated": not activate
+        })
+
+    def _confirm_admin_spam_warn(self, username, warn):
+        username = (username or "").strip()
+        if not username or username == self.username:
+            return
+        title = "Варн спам" if warn else "Снять варн спам"
+        action_text = "Выдать варн спам" if warn else "Снять варн спам"
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            title,
+            f"{action_text} пользователю {username}?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        self._send_action({
+            "action": "admin_set_spam_warn",
+            "username": username,
+            "warned": bool(warn)
         })
 
     def _handle_admin_delete_result(self, data):
@@ -2306,6 +2429,26 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.warning(
             self,
             "Доступ к аккаунту",
+            message
+        )
+
+    def _handle_admin_warn_result(self, data):
+        status = (data.get("status") or "").strip().lower()
+        username = (data.get("username") or "").strip()
+        warned = bool(data.get("warned", False))
+        if status == "ok":
+            title = "Варн спам"
+            message = (
+                f"Пользователю {username} "
+                f"{'выдан варн спам' if warned else 'снят варн спам'}"
+            )
+            QtWidgets.QMessageBox.information(self, title, message)
+            self._request_admin_users()
+            return
+        message = data.get("message", "Не удалось изменить доступ")
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Варн спам",
             message
         )
 
@@ -2565,6 +2708,10 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             else:
                 self.notifier.hide()
 
+    def _set_theme(self, enabled):
+        theme = "dark" if bool(enabled) else "light"
+        self._apply_theme(theme)
+
     def _is_window_minimized(self):
         return bool(self.windowState() & QtCore.Qt.WindowMinimized)
 
@@ -2612,6 +2759,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.passcode_login_overlay.hide()
         if getattr(self, "group_info_overlay", None):
             self.group_info_overlay.hide()
+        if getattr(self, "admin_action_overlay", None):
+            self.admin_action_overlay.hide()
         if self.pending_socket:
             try:
                 self.pending_socket.close()
@@ -2908,7 +3057,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     def _load_settings(self):
         if not os.path.exists(self.settings_path):
-            return {"windows_notifications": True}
+            return {"windows_notifications": True, "theme": "light"}
         try:
             with open(self.settings_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -2916,11 +3065,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 return data
         except Exception:
             pass
-        return {"windows_notifications": True}
+        return {"windows_notifications": True, "theme": "light"}
 
     def _save_settings(self):
         data = {
-            "windows_notifications": bool(self.use_windows_notifications)
+            "windows_notifications": bool(self.use_windows_notifications),
+            "theme": getattr(self, "theme", "light")
         }
         try:
             with open(self.settings_path, "w", encoding="utf-8") as f:
@@ -4331,6 +4481,14 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                 if btn.clickedButton() == join:
                     self._send_action({"action": "accept_group_invite", "group_id": gid})
             return
+        if data.get("type") == "group_invite_result":
+            status = (data.get("status") or "").strip()
+            if status == "ok":
+                target = (data.get("username") or "").strip()
+                QtWidgets.QMessageBox.information(self, "Группа", f"Приглашение отправлено {target}".strip())
+            else:
+                QtWidgets.QMessageBox.warning(self, "Группа", data.get("message", "Не удалось отправить приглашение"))
+            return
         if data.get("type") == "group_created":
             status = (data.get("status") or "").strip()
             grp = data.get("group") or {}
@@ -4440,6 +4598,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             return
         if data.get("type") == "admin_deactivate_result":
             self._handle_admin_deactivate_result(data)
+            return
+        if data.get("type") == "admin_warn_result":
+            self._handle_admin_warn_result(data)
+            return
+        if data.get("type") == "add_contact_result":
+            self._handle_add_contact_result(data)
             return
         if data.get("type") == "file_upload_ready":
             self._handle_upload_ready(data)
@@ -5413,6 +5577,17 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self._render_users_list()
         self._send_action({"action": "remove_contact", "username": username})
 
+    def _handle_add_contact_result(self, data):
+        status = (data.get("status") or "").strip().lower()
+        username = (data.get("username") or "").strip()
+        if username and username in self.pending_contact_adds:
+            self.pending_contact_adds.discard(username)
+        if self.search_query:
+            self._render_users_list()
+        if status != "ok":
+            message = data.get("message", "Не удалось добавить в контакты")
+            QtWidgets.QMessageBox.warning(self, "Контакты", message)
+
     def _apply_search_results(self, data):
         query = (data.get("query") or "").strip()
         if not query or query != self.search_query:
@@ -5766,6 +5941,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.group_info_overlay.resize(self.chat_page.rect())
         if getattr(self, "admin_overlay", None):
             self.admin_overlay.resize(self.chat_page.rect())
+        if getattr(self, "admin_action_overlay", None):
+            self.admin_action_overlay.resize(self.chat_page.rect())
 
     def _show_settings_overlay(self):
         if getattr(self, "settings_overlay", None):

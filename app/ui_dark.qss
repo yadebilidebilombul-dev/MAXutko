@@ -1,0 +1,575 @@
+QWidget {
+    background: #0f172a;
+    color: #e5e7eb;
+    font-family: "Segoe UI";
+    font-size: 10pt;
+}
+
+QMainWindow, QStackedWidget {
+    background: #0f172a;
+}
+
+#loginCard {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+}
+
+#titleLabel {
+    color: #3b82f6;
+}
+
+#topBar {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+}
+
+#selfAvatar {
+    color: #9ca3af;
+    border-radius: 20px;
+}
+
+#userNameLabel {
+    color: #e5e7eb;
+    font-weight: 600;
+}
+
+#userMetaLabel {
+    color: #94a3b8;
+    font-size: 9pt;
+}
+
+#clanPrimaryLabel {
+    color: #bfdbfe;
+    background: #1e3a8a;
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-weight: 600;
+    font-size: 10.5pt;
+}
+
+#clanDotLabel {
+    color: #64748b;
+    font-weight: 700;
+}
+
+#clanSecondaryLabel {
+    color: #cbd5f5;
+    background: #1f2937;
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-weight: 600;
+    font-size: 9pt;
+}
+
+#chatTitle {
+    color: #e5e7eb;
+    font-weight: 600;
+}
+
+#overlay {
+    background: rgba(0, 0, 0, 120);
+}
+
+#settingsModal {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 16px;
+}
+
+#settingsClose {
+    background: #111827;
+    color: #e5e7eb;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+    padding: 0px;
+    font-size: 12pt;
+}
+
+#settingsClose:hover {
+    background: #0f172a;
+}
+
+#settingsButton {
+    background: #111827;
+    color: #e5e7eb;
+    border: 1px solid #1f2937;
+    border-radius: 16px;
+    padding: 0px;
+    font-size: 12pt;
+}
+
+#settingsButton:hover {
+    background: #0f172a;
+}
+
+QLineEdit, QTextEdit {
+    color: #e5e7eb;
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 10px;
+    padding: 8px 10px;
+}
+
+#inputArea {
+    min-height: 46px;
+    max-height: 46px;
+    border: none;
+    padding: 8px 4px 8px 2px;
+    background: transparent;
+}
+
+#inputWrap {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 10px;
+}
+
+#attachButton {
+    background: #1e293b;
+    color: #bfdbfe;
+    border: 1px solid #1e3a8a;
+    border-radius: 16px;
+    padding: 0px;
+}
+
+#attachButton:hover {
+    background: #0f172a;
+}
+
+QPushButton#primaryButton {
+    background: #2563eb;
+    color: #ffffff;
+    border-radius: 10px;
+    padding: 8px 18px;
+}
+
+QPushButton#primaryButton:hover {
+    background: #1d4ed8;
+}
+
+QPushButton#ghostButton {
+    background: #111827;
+    color: #e5e7eb;
+    border: 1px solid #1f2937;
+    border-radius: 10px;
+    padding: 6px 14px;
+}
+
+QPushButton#ghostButton:hover {
+    background: #0f172a;
+}
+
+QPushButton#circleBackButton {
+    background: #111827;
+    color: #e5e7eb;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+    padding: 0px;
+    font-weight: 600;
+}
+
+QPushButton#circleBackButton:hover {
+    background: #0f172a;
+}
+
+QPushButton#dangerButton {
+    background: #ef4444;
+    color: #ffffff;
+    border-radius: 10px;
+    padding: 6px 14px;
+}
+
+QPushButton#dangerButton:hover {
+    background: #dc2626;
+}
+
+QPushButton#deleteDialogButton {
+    background: #111827;
+    color: #e5e7eb;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    padding: 8px 16px;
+    font-weight: 600;
+}
+
+QPushButton#deleteDialogButton:hover {
+    background: #0f172a;
+}
+
+QPushButton#deleteDialogDangerButton {
+    background: #ef4444;
+    color: #ffffff;
+    border-radius: 12px;
+    padding: 8px 16px;
+    font-weight: 600;
+}
+
+QPushButton#deleteDialogDangerButton:hover {
+    background: #dc2626;
+}
+
+QRadioButton {
+    spacing: 8px;
+    color: #cbd5f5;
+}
+
+QScrollArea {
+    border: none;
+    background: #0f172a;
+}
+
+#messagesContainer {
+    background: #0f172a;
+}
+
+#usersPanel {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+}
+
+#usersTitle {
+    color: #e5e7eb;
+    font-weight: 600;
+}
+
+#usersList {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+#usersList::item {
+    padding: 2px 2px;
+}
+
+#usersList::item:selected {
+    background: transparent;
+}
+
+#userRow {
+    background: transparent;
+    border-radius: 10px;
+}
+
+#userRow[selected="true"] {
+    background: #1e3a8a;
+    border: 1px solid #1d4ed8;
+}
+
+#userRow[selected="true"] QLabel {
+    color: #bfdbfe;
+}
+
+#groupRow {
+    background: transparent;
+    border-radius: 10px;
+}
+
+#groupRow[selected="true"] {
+    background: #1e3a8a;
+    border: 1px solid #1d4ed8;
+}
+
+#groupRow[selected="true"] QLabel {
+    color: #bfdbfe;
+}
+
+#userAvatar {
+    background: transparent;
+    color: #9ca3af;
+    border-radius: 13px;
+    font-weight: 600;
+    padding: 0px;
+}
+
+#userNameActive {
+    color: #e5e7eb;
+}
+
+#userNameInactive {
+    color: #94a3b8;
+}
+
+#unreadBadge {
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 20px;
+    max-height: 20px;
+    padding: 0px;
+    border-radius: 10px;
+    margin: 0px;
+    background: #2563eb;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+#messageRow {
+    background: transparent;
+}
+
+#messageAvatar {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 15px;
+    color: #94a3b8;
+}
+
+#messageBubbleMe {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #2563eb, stop:1 #1d4ed8);
+    border-radius: 16px;
+    padding: 10px 12px;
+}
+
+#messageBubbleOther {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 16px;
+    padding: 10px 12px;
+}
+
+#messageSystem {
+    background: #1f2937;
+    border-radius: 18px;
+    padding: 6px 14px;
+}
+
+#messageHeader {
+    background: transparent;
+}
+
+#messageAuthor {
+    color: #e2e8f0;
+    font-weight: 600;
+    font-size: 9.5pt;
+}
+
+#messageTime {
+    color: #94a3b8;
+    font-size: 8.5pt;
+}
+
+#messageStatus {
+    color: #dbeafe;
+    font-size: 8.5pt;
+    font-weight: 600;
+}
+
+#messageMeta {
+    background: transparent;
+}
+
+#messageMetaTime {
+    color: #94a3b8;
+    font-size: 8pt;
+}
+
+#messageMetaStatus {
+    color: #94a3b8;
+    font-size: 8pt;
+    font-weight: 600;
+}
+
+#messageBody {
+    color: #e2e8f0;
+    font-size: 10pt;
+}
+
+#messageReply {
+    background: #0b1220;
+    border-left: 3px solid #475569;
+    border-radius: 12px;
+}
+
+#messageReplyMeta {
+    color: #94a3b8;
+    font-size: 8.5pt;
+    font-weight: 600;
+}
+
+#messageReplyBody {
+    color: #cbd5f5;
+    font-size: 9pt;
+}
+
+#fileCard {
+    background: #0b1220;
+    border: 1px dashed #334155;
+    border-radius: 12px;
+}
+
+#fileName {
+    color: #e2e8f0;
+    font-weight: 600;
+}
+
+#fileSize {
+    color: #94a3b8;
+    font-size: 8.5pt;
+}
+
+#fileButton {
+    background: #111827;
+    color: #bfdbfe;
+    border: 1px solid #1e3a8a;
+    border-radius: 10px;
+    padding: 4px 10px;
+    min-height: 28px;
+}
+
+#fileButton:hover {
+    background: #0f172a;
+}
+
+#messageBubbleMe QLabel {
+    background: transparent;
+    color: #f8fafc;
+}
+
+#messageBubbleMe #messageAuthor,
+#messageBubbleMe #messageTime {
+    color: #dbeafe;
+}
+
+#messageBubbleMe #messageReply {
+    background: #1e3a8a;
+    border-left: 3px solid #93c5fd;
+}
+
+#messageBubbleMe #messageReplyMeta,
+#messageBubbleMe #messageReplyBody,
+#messageBubbleMe #fileName,
+#messageBubbleMe #fileSize {
+    color: #e0e7ff;
+}
+
+#messageBubbleMe #messageMetaTime,
+#messageBubbleMe #messageMetaStatus {
+    color: #c7d2fe;
+}
+
+#messageBubbleMe #fileCard {
+    background: #1e3a8a;
+    border: 1px dashed #93c5fd;
+}
+
+#messageBubbleMe #fileButton {
+    background: #1e3a8a;
+    color: #dbeafe;
+    border: 1px solid #93c5fd;
+}
+
+#messageBubbleMe #fileButton:hover {
+    background: #1e40af;
+}
+
+#replyBar {
+    background: #111827;
+    border: 1px solid #1e3a8a;
+    border-radius: 10px;
+}
+
+#replyMeta {
+    color: #93c5fd;
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+#replyBody {
+    color: #94a3b8;
+    font-size: 9pt;
+}
+
+#statusLabel {
+    color: #3b82f6;
+}
+
+#linkLabel {
+    color: #60a5fa;
+    font-size: 9pt;
+}
+
+#linkLabel:hover {
+    color: #93c5fd;
+}
+
+#mutedLabel {
+    color: #94a3b8;
+}
+
+#groupInfoName {
+    color: #bfdbfe;
+    background: #1e3a8a;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-weight: 600;
+    font-size: 10.5pt;
+}
+
+#groupInfoMembersPanel {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+}
+
+#groupInfoMembersTitle {
+    color: #e5e7eb;
+    font-weight: 600;
+}
+
+#groupInfoMembersList {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+#groupInfoMembersList::item {
+    padding: 2px 2px;
+}
+
+QListWidget#groupInfoMembersList QWidget {
+    background: transparent;
+}
+
+QPushButton {
+    color: #e5e7eb;
+}
+
+#dateSeparator {
+    background: transparent;
+}
+
+#dateSeparatorLabel {
+    background: #1f2937;
+    color: #94a3b8;
+    padding: 6px 14px;
+    border-radius: 18px;
+    font-size: 9pt;
+    font-weight: 500;
+}
+
+#adminUsersTable {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    alternate-background-color: #0b1220;
+}
+
+#adminUsersTable::item {
+    padding: 6px 8px;
+}
+
+#adminUsersTable::item:selected {
+    background: #1e3a8a;
+}
+
+#adminUsersTable QHeaderView::section {
+    background: #0f172a;
+    color: #e5e7eb;
+    border: 1px solid #1f2937;
+    padding: 6px 8px;
+    font-weight: 600;
+}
