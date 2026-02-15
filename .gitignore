@@ -51,3 +51,5 @@ desktop.ini
 
 # User-uploaded files
 server/files/
+server/bots.json
+server/account_blocks.json

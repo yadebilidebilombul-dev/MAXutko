@@ -30,6 +30,7 @@ from network_utils import (
     untrack_connection,
     connection_limit_exceeded
 )
+from API_utils import BotAPI
 
 # Testing Mode flag
 TestingMode = False
@@ -276,6 +277,7 @@ class MAXutkoServer:
         self.updates = self.load_updates()
 
         self.logger = ServerLogger()
+        self.bot_api = BotAPI(self, DEACTIVATED_LOGIN_MESSAGE)
 
 
     # ================= LOGGING =================
@@ -300,7 +302,7 @@ class MAXutkoServer:
             return {"raw": str(payload)[:200]}
         redacted = {}
         for key, value in payload.items():
-            if key in {"password", "passcode", "passcode_hash", "token", "hash", "salt"}:
+            if key in {"password", "passcode", "passcode_hash", "PassCodeHash", "token", "bot_token", "recovery_password", "hash", "salt"}:
                 continue
             if key in {"message", "note"}:
                 if isinstance(value, str):
@@ -1900,6 +1902,11 @@ class MAXutkoServer:
             action = login.get("action", "login")
             token = login.get("token", "")
             passcode = (login.get("passcode") or "").strip()
+
+            if action in ("bot_create", "bot_send", "bot_fetch"):
+                self.bot_api.handle_request(client, ip, login)
+                client.close()
+                return
 
             self._safe_log("auth_request", {
                 "ip": ip,
