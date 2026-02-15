@@ -7,10 +7,8 @@ from email.message import EmailMessage
 SwitchMail = True
 CONSOLE_EMAIL = "1aaafeobpdjpaa12bgdbn1ndd2"
 
-# Default to Yandex, but can be overridden
-DEFAULT_SMTP_HOST = os.getenv("SMTP_HOST", "smtp.yandex.ru")
-DEFAULT_SMTP_PORT = os.getenv("SMTP_PORT", "587")
-
+DEFAULT_SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+DEFAULT_SMTP_PORT = os.getenv("SMTP_PORT", "465")
 
 
 def _coerce_bool(value, default):
@@ -56,8 +54,8 @@ class MailSender:
     ):
         self.smtp_host = smtp_host or os.getenv("SMTP_HOST", DEFAULT_SMTP_HOST)
         self.smtp_port = int(smtp_port or os.getenv("SMTP_PORT", DEFAULT_SMTP_PORT))
-        self.username = username or os.getenv("SMTP_USER", "iwantraiker@yandex.ru")
-        self.password = password or os.getenv("SMTP_PASS", "utivdxhygqdojguc")
+        self.username = username or os.getenv("SMTP_USER", "moro23728@gmail.com")
+        self.password = password or os.getenv("SMTP_PASS", "gvgl vwwy fycp iwni")
         self.from_email = from_email or os.getenv("SMTP_FROM", self.username)
         self.use_tls = use_tls
         self.use_ssl = use_ssl
