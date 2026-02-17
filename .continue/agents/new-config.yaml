@@ -1,0 +1,22 @@
+name: Local Agent
+version: 1.0.0
+schema: v1
+
+models:
+  - name: "Qwen 3B"
+    uses: ollama/qwen2.5-coder:3b
+  - name: "Qwen 1.5B"
+    uses: ollama/qwen2.5-coder:1.5b
+
+tabAutocompleteModel:
+  name: "Autocomplete 1.5B"
+  uses: ollama/qwen2.5-coder:1.5b
+
+contextProviders:
+  - name: codebase
+  - name: openFiles
+  - name: terminal
+
+embeddingsProvider:
+  name: "Embeddings"
+  uses: ollama/nomic-embed-text

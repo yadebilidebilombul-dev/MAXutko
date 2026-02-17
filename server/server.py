@@ -16,6 +16,8 @@ from mailSystem.mailCla import MailSender, CodeGenerator, is_console_email
 from crypto_utils import (
     CryptoUnavailableError,
     build_passcode,
+    decrypt_token,
+    encrypt_token,
     hash_password,
     is_modern_password_hash,
     verify_legacy_password,
@@ -505,30 +507,78 @@ class MAXutkoServer:
         with open(self.tokens_path, "w", encoding="utf-8") as f:
             json.dump(self.tokens, f, ensure_ascii=False, indent=2)
 
-    def _issue_token(self, username):
-        token = secrets.token_hex(24)
+    def _current_server_version(self):
+        with self.updates_lock:
+            return (self.updates.get("version") or "0.0.0").strip()
+
+    def _is_client_version_ok(self, client_version):
+        client_version = (client_version or "").strip()
+        if not client_version:
+            return False
+        return client_version == self._current_server_version()
+
+    def _build_token_payload(self, username, client_version):
+        return json.dumps({
+            "u": username,
+            "v": client_version,
+            "n": secrets.token_hex(16),
+            "iat": int(time.time())
+        }, separators=(",", ":"), ensure_ascii=False)
+
+    def _parse_token_payload(self, token_plain):
+        try:
+            data = json.loads(token_plain)
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        username = (data.get("u") or "").strip()
+        version = (data.get("v") or "").strip()
+        if not username or not version:
+            return None
+        return {"username": username, "version": version}
+
+    def _issue_token(self, username, client_version):
+        token_plain = self._build_token_payload(username, client_version)
+        token = encrypt_token(token_plain)
         expires_at = time.time() + self.token_ttl_seconds
         with self.tokens_lock:
             to_remove = [t for t, v in self.tokens.items() if v.get("username") == username]
             for t in to_remove:
                 self.tokens.pop(t, None)
-            self.tokens[token] = {"username": username, "expires_at": expires_at}
+            self.tokens[token_plain] = {
+                "username": username,
+                "version": client_version,
+                "expires_at": expires_at
+            }
             self.save_tokens()
         return token
 
-    def _username_by_token(self, token):
+    def _validate_token(self, token):
         if not token:
-            return None
+            return {"status": "invalid"}
+        token_plain = decrypt_token(token)
+        payload = self._parse_token_payload(token_plain)
+        if not payload:
+            return {"status": "invalid"}
+        if not self._is_client_version_ok(payload["version"]):
+            return {"status": "outdated"}
         now = time.time()
         with self.tokens_lock:
-            item = self.tokens.get(token)
+            item = self.tokens.get(token_plain)
             if not item:
-                return None
+                return {"status": "invalid"}
             if item.get("expires_at", 0) <= now:
-                self.tokens.pop(token, None)
+                self.tokens.pop(token_plain, None)
                 self.save_tokens()
-                return None
-            return item.get("username")
+                return {"status": "invalid"}
+            if (item.get("username") or "") != payload["username"]:
+                return {"status": "invalid"}
+        return {
+            "status": "ok",
+            "username": payload["username"],
+            "version": payload["version"]
+        }
 
 
     # ================= FILES =================
@@ -630,6 +680,14 @@ class MAXutkoServer:
         if not base:
             base = "file"
         return base[:180]
+
+    def _is_valid_file_id(self, file_id):
+        file_id = (file_id or "").strip()
+        if not file_id:
+            return False
+        if len(file_id) > 64:
+            return False
+        return re.fullmatch(r"[a-fA-F0-9]{8,64}", file_id) is not None
 
     def _safe_send(self, sock, data):
         return safe_send(self, sock, data)
@@ -1902,6 +1960,8 @@ class MAXutkoServer:
             action = login.get("action", "login")
             token = login.get("token", "")
             passcode = (login.get("passcode") or "").strip()
+            client_version = (login.get("client_version") or "").strip()
+            effective_client_version = client_version
 
             if action in ("bot_create", "bot_send", "bot_fetch"):
                 self.bot_api.handle_request(client, ip, login)
@@ -1913,16 +1973,28 @@ class MAXutkoServer:
                 "payload": self._sanitize_log_payload(login)
             })
 
+            if action != "token_login":
+                if not self._is_client_version_ok(client_version):
+                    self.send_auth(client, "error", "Ваш клиент устарел. Пожалуйста, обновите его")
+                    client.close()
+                    return
+
             if action == "token_login":
                 if not self._rate_limit(f"auth:token:{ip}", 5, 30):
                     self.send_auth(client, "error", "Too many attempts")
                     client.close()
                     return
-                username = self._username_by_token(token)
-                if not username:
+                token_info = self._validate_token(token)
+                if token_info.get("status") == "outdated":
+                    self.send_auth(client, "error", "Ваш клиент устарел. Пожалуйста, обновите его")
+                    client.close()
+                    return
+                if token_info.get("status") != "ok":
                     self.send_auth(client, "error", "Invalid token")
                     client.close()
                     return
+                username = token_info.get("username") or ""
+                effective_client_version = (token_info.get("version") or "").strip()
                 if self._is_account_blocked(username):
                     self.send_auth(client, "error", DEACTIVATED_LOGIN_MESSAGE)
                     client.close()
@@ -2249,7 +2321,7 @@ class MAXutkoServer:
             with self.send_locks_lock:
                 self.send_locks[client] = threading.Lock()
 
-            token_value = self._issue_token(username)
+            token_value = self._issue_token(username, effective_client_version)
             self.send_auth(client, "ok", token=token_value, username=username)
 
             print(f"[+] {username} logged in")
@@ -3054,6 +3126,13 @@ class MAXutkoServer:
                 "message": "Invalid file"
             })
             return
+        if not self._is_valid_file_id(file_id):
+            self._safe_send_json(client, {
+                "type": "file_upload_reject",
+                "file_id": file_id,
+                "message": "Invalid file id"
+            })
+            return
         if size > self.max_file_size:
             self._safe_send_json(client, {
                 "type": "file_upload_reject",
@@ -3248,6 +3327,13 @@ class MAXutkoServer:
     def _handle_file_request(self, username, msg, client):
         file_id = (msg.get("file_id") or "").strip()
         if not file_id:
+            return
+        if not self._is_valid_file_id(file_id):
+            self._safe_send_json(client, {
+                "type": "file_error",
+                "file_id": file_id,
+                "message": "Invalid file id"
+            })
             return
         with self.file_index_lock:
             meta = self.file_index.get(file_id)

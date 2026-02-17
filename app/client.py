@@ -29,7 +29,7 @@ except Exception:
 #flag for testing mode
 TestingMode = False
 
-VersionBulid = "2.1.4"
+VersionBulid = "2.2.2"
 
 # Modify server IP and build version based on TestingMode
 if TestingMode:
@@ -44,16 +44,9 @@ CLANS = ["Одмен", "Новичок", "Старик", "Старейшина",
 CLAN_PRIMARY = {"Одмен", "Модер"}
 CLAN_SECONDARY = {"Старейшина", "Новичок", "Старик"}
 
-# Update URLs on Google Drive (direct download links)
-# TO SET:
-# 1. Upload Updates.json to Google Drive
-# 2. Upload MAXutko.exe to Google Drive
-# 3. Get file IDs from share URLs
-# 4. Create direct download links:
-#    https://drive.google.com/uc?id=FILE_ID&export=download
-UPDATES_JSON_URL = "https://drive.google.com/uc?export=download&id=1DZ6ezC9aR1aJj3xx__uHGR8BgcNBDn8Y"  # Updates.json file ID
-UPDATE_EXE_URL = "https://drive.google.com/uc?export=download&id=1dth5XpBctulLFQNpx6im8RavvI_ja1WT"    # MAXutko.exe file ID
 
+UPDATES_JSON_URL = "https://drive.google.com/uc?export=download&id=1DZ6ezC9aR1aJj3xx__uHGR8BgcNBDn8Y"  # Updates.json
+UPDATE_EXE_URL = "https://drive.google.com/uc?export=download&id=1dth5XpBctulLFQNpx6im8RavvI_ja1WT"    # MAXutko.exe
 
 def resource_path(relative):
     if hasattr(sys, "_MEIPASS"):
@@ -131,7 +124,8 @@ class AuthWorker(QtCore.QThread):
                 "password": self.password,
                 "email": self.email,
                 "token": self.token,
-                "passcode": self.passcode
+                "passcode": self.passcode,
+                "client_version": VersionBulid
             }) + "\n"
             sock.sendall(login_data.encode())
 

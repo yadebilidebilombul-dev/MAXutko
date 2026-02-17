@@ -113,15 +113,6 @@ class BotAPI:
             self._send_bot_response(client, "bot_create", "error", "\u041f\u0430\u0440\u043e\u043b\u044c \u0432\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f \u0434\u043e\u043b\u0436\u0435\u043d \u0431\u044b\u0442\u044c 6 \u0446\u0438\u0444\u0440")
             return
 
-        with self.server.accounts_lock:
-            if bot_name in self.server.accounts:
-                self._send_bot_response(client, "bot_create", "error", "\u0418\u043c\u044f \u0443\u0436\u0435 \u0437\u0430\u043d\u044f\u0442\u043e")
-                return
-        with self.server.bots_lock:
-            if bot_name in self.server.bots:
-                self._send_bot_response(client, "bot_create", "error", "\u0411\u043e\u0442 \u0443\u0436\u0435 \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u0435\u0442")
-                return
-
         profile = {
             "nick": bot_username,
             "about": "",
@@ -130,34 +121,40 @@ class BotAPI:
             "clan_secondary": "\u041d\u043e\u0432\u0438\u0447\u043e\u043a"
         }
         with self.server.accounts_lock:
-            self.server.accounts[bot_name] = {
-                "salt": "",
-                "hash": "",
-                "email": "",
-                "passcode_hash": "",
-                "profile": profile,
-                "registered_at": int(time.time())
-            }
-            self.server.save_accounts()
+            with self.server.bots_lock:
+                if bot_name in self.server.accounts:
+                    self._send_bot_response(client, "bot_create", "error", "\u0418\u043c\u044f \u0443\u0436\u0435 \u0437\u0430\u043d\u044f\u0442\u043e")
+                    return
+                if bot_name in self.server.bots:
+                    self._send_bot_response(client, "bot_create", "error", "\u0411\u043e\u0442 \u0443\u0436\u0435 \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u0435\u0442")
+                    return
+                self.server.accounts[bot_name] = {
+                    "salt": "",
+                    "hash": "",
+                    "email": "",
+                    "passcode_hash": "",
+                    "profile": profile,
+                    "registered_at": int(time.time())
+                }
 
-        token = secrets.token_hex(24)
-        with self.server.bots_lock:
-            existing_tokens = {
-                (entry.get("token") or "").strip()
-                for entry in self.server.bots.values()
-                if isinstance(entry, dict)
-            }
-            while token in existing_tokens:
                 token = secrets.token_hex(24)
-            self.server.bots[bot_name] = {
-                "owner": owner,
-                "bot_username": bot_username,
-                "recovery_password": recovery_password,
-                "token": token,
-                "created_at": int(time.time()),
-                "last_seen_id": ""
-            }
-            self.save_bots()
+                existing_tokens = {
+                    (entry.get("token") or "").strip()
+                    for entry in self.server.bots.values()
+                    if isinstance(entry, dict)
+                }
+                while token in existing_tokens:
+                    token = secrets.token_hex(24)
+                self.server.bots[bot_name] = {
+                    "owner": owner,
+                    "bot_username": bot_username,
+                    "recovery_password": recovery_password,
+                    "token": token,
+                    "created_at": int(time.time()),
+                    "last_seen_id": ""
+                }
+                self.server.save_accounts()
+                self.save_bots()
 
         self.server._safe_log("bot_create", {
             "owner": owner,
