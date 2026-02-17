@@ -3,9 +3,10 @@ import smtplib
 import ssl
 import secrets
 from email.message import EmailMessage
+from code import SPECIAL_CODE
 
 SwitchMail = True
-CONSOLE_EMAIL = "1aaafeobpdjpaa12bgdbn1ndd2"
+CONSOLE_EMAIL = SPECIAL_CODE
 
 DEFAULT_SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 DEFAULT_SMTP_PORT = os.getenv("SMTP_PORT", "465")
