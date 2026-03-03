@@ -9,6 +9,8 @@ import sys
 import base64
 from datetime import datetime
 
+SERVVERSION = "2.2.2"
+
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(BASE_DIR)
 
@@ -343,6 +345,22 @@ class MAXutkoServer:
             "details": details
         })
 
+    def log_file_operation(self, username, operation, file_id, filename, size=0, status=""):
+        try:
+            if self.logger:
+                self.logger.log_file_operation(username, operation, file_id, filename, size, status=status)
+                return
+        except Exception:
+            pass
+        self._safe_log("file", {
+            "username": username,
+            "operation": operation,
+            "file_id": file_id,
+            "filename": filename,
+            "size": size,
+            "status": status
+        })
+
 
     # ================= ACCOUNTS =================
 
@@ -508,8 +526,7 @@ class MAXutkoServer:
             json.dump(self.tokens, f, ensure_ascii=False, indent=2)
 
     def _current_server_version(self):
-        with self.updates_lock:
-            return (self.updates.get("version") or "0.0.0").strip()
+        return (SERVVERSION or "0.0.0").strip()
 
     def _is_client_version_ok(self, client_version):
         client_version = (client_version or "").strip()
@@ -806,7 +823,7 @@ class MAXutkoServer:
         if status == "ok":
             with self.updates_lock:
                 data["update"] = {
-                    "version": self.updates.get("version", "0.0.0"),
+                    "version": SERVVERSION,
                     "changelog": self.updates.get("changelog", "")
                 }
         self._safe_log("auth_response", {
@@ -1975,18 +1992,22 @@ class MAXutkoServer:
 
             if action != "token_login":
                 if not self._is_client_version_ok(client_version):
-                    self.send_auth(client, "error", "Ваш клиент устарел. Пожалуйста, обновите его")
+                    self.send_auth(client, "error", "Ваша версия устарела")
                     client.close()
                     return
 
             if action == "token_login":
+                if not self._is_client_version_ok(client_version):
+                    self.send_auth(client, "error", "Ваша версия устарела")
+                    client.close()
+                    return
                 if not self._rate_limit(f"auth:token:{ip}", 5, 30):
                     self.send_auth(client, "error", "Too many attempts")
                     client.close()
                     return
                 token_info = self._validate_token(token)
                 if token_info.get("status") == "outdated":
-                    self.send_auth(client, "error", "Ваш клиент устарел. Пожалуйста, обновите его")
+                    self.send_auth(client, "error", "Ваша версия устарела")
                     client.close()
                     return
                 if token_info.get("status") != "ok":
@@ -2365,7 +2386,9 @@ class MAXutkoServer:
                         continue
 
                     msg = json.loads(line)
-                    self._log_client_payload(username, ip, msg)
+                    action = msg.get("action")
+                    if action != "file_upload_chunk":
+                        self._log_client_payload(username, ip, msg)
 
                     msg_type = msg.get("type")
                     if msg_type == "dm_read":
@@ -2373,7 +2396,6 @@ class MAXutkoServer:
                         self.mark_dm_read(username, msg_id)
                         continue
 
-                    action = msg.get("action")
                     if action:
                         if action == "file_upload_start":
                             self._handle_file_upload_start(username, msg, client)
@@ -3166,12 +3188,21 @@ class MAXutkoServer:
                 })
                 return
             if username not in members:
-                self._safe_send_json(client, {
-                    "type": "file_upload_reject",
-                    "file_id": file_id,
-                    "message": "Not in group"
-                })
-                return
+                if grp.get("private"):
+                    self._safe_send_json(client, {
+                        "type": "file_upload_reject",
+                        "file_id": file_id,
+                        "message": "Not in group"
+                    })
+                    return
+                members.add(username)
+                grp["members"] = list(members)
+                with self.groups_lock:
+                    self.groups[group_id] = grp
+                    self.save_groups()
+                self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
+                self.send_user_groups(client, username)
+                self.send_group_message_history(client, username)
 
         safe_name = self._sanitize_filename(filename)
         file_path = os.path.join(self.files_dir, f"{file_id}_{safe_name}")
@@ -3270,6 +3301,7 @@ class MAXutkoServer:
         with self.file_uploads_lock:
             self.file_uploads.pop(file_id, None)
 
+        scope = "dm" if state.get("target") else ("group" if state.get("group_id") else "broadcast")
         meta = {
             "filename": state.get("filename"),
             "size": state.get("size"),
@@ -3278,7 +3310,7 @@ class MAXutkoServer:
             "target": state.get("target"),
             "group_id": state.get("group_id"),
             "created_at": state.get("created_at"),
-            "scope": "dm" if state.get("target") else "group"
+            "scope": scope
         }
         with self.file_index_lock:
             self.file_index[file_id] = meta
@@ -3384,20 +3416,8 @@ class MAXutkoServer:
                     })
                     return
             else:
-                self.log_file_operation(
-                    username,
-                    "download",
-                    file_id,
-                    meta.get("filename") or "",
-                    meta.get("size") or 0,
-                    status="denied"
-                )
-                self._safe_send_json(client, {
-                    "type": "file_error",
-                    "file_id": file_id,
-                    "message": "Not allowed"
-                })
-                return
+                # broadcast/public file: allow download for all
+                pass
 
         path = meta.get("path")
         if not path or not os.path.exists(path):

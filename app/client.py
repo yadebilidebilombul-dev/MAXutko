@@ -13,6 +13,7 @@ import secrets
 import queue
 import getpass
 import gc
+from collections import deque
 from PyQt5 import QtCore, QtWidgets, QtGui
 from overlay_utils import OverlayController
 from notifications import WindowsNotifier, PopupNotifier
@@ -29,15 +30,15 @@ except Exception:
 #flag for testing mode
 TestingMode = False
 
-VersionBulid = "2.2.2"
+CLIENT_VERSION = "2.2.2"
 
 # Modify server IP and build version based on TestingMode
 if TestingMode:
     SERVER_HOST = "127.0.0.1"
-    BUILD_VERSION = f"Build {VersionBulid} - Testing Mode"
+    BUILD_VERSION = f"Build {CLIENT_VERSION} - Testing Mode"
 else:
     SERVER_HOST = "26.202.145.247"
-    BUILD_VERSION = f"Build {VersionBulid}"
+    BUILD_VERSION = f"Build {CLIENT_VERSION}"
 
 SERVER_PORT = 5555
 CLANS = ["Одмен", "Новичок", "Старик", "Старейшина", "Модер"]
@@ -125,7 +126,7 @@ class AuthWorker(QtCore.QThread):
                 "email": self.email,
                 "token": self.token,
                 "passcode": self.passcode,
-                "client_version": VersionBulid
+                "client_version": CLIENT_VERSION
             }) + "\n"
             sock.sendall(login_data.encode())
 
@@ -269,7 +270,10 @@ class SenderThread(QtCore.QThread):
         super().__init__()
         self.sock = sock
         self._running = True
-        self._queue = []
+        self._queue_high = deque()
+        self._queue_low = deque()
+        self._high_burst = 0
+        self._max_high_burst = 8
         self._lock = threading.Lock()
         self._event = threading.Event()
 
@@ -277,10 +281,13 @@ class SenderThread(QtCore.QThread):
         self._running = False
         self._event.set()
 
-    def send(self, payload):
+    def send(self, payload, priority="high"):
         data = json.dumps(payload) + "\n"
         with self._lock:
-            self._queue.append(data)
+            if priority == "low":
+                self._queue_low.append(data)
+            else:
+                self._queue_high.append(data)
         self._event.set()
 
     def run(self):
@@ -289,9 +296,16 @@ class SenderThread(QtCore.QThread):
             self._event.clear()
             while True:
                 with self._lock:
-                    if not self._queue:
+                    data = None
+                    if self._queue_high and (self._high_burst < self._max_high_burst or not self._queue_low):
+                        data = self._queue_high.popleft()
+                        self._high_burst += 1
+                    elif self._queue_low:
+                        data = self._queue_low.popleft()
+                        self._high_burst = 0
+                    else:
+                        self._high_burst = 0
                         break
-                    data = self._queue.pop(0)
                 try:
                     self.sock.sendall(data.encode())
                 except Exception as e:
@@ -899,7 +913,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         
         # Updates
         self.updates_overlay = None
-        self.current_version = VersionBulid
+        self.current_version = CLIENT_VERSION
         self.available_update = None
 
         self.setup_ui()
@@ -1645,7 +1659,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             self.settings_notifications_checkbox.setToolTip("Системные уведомления недоступны.")
 
         iwanTrikerCprght = QtWidgets.QLabel(
-            f"Build: {VersionBulid}"
+            f"Build: {CLIENT_VERSION}"
             " ЯьЙ! By iwanTriker and..."
             " No Contrybuters :c"
         )
@@ -3212,11 +3226,11 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         self.auth_worker.error.connect(on_error)
         self.auth_worker.start()
 
-    def _send_action(self, payload):
+    def _send_action(self, payload, priority="high"):
         if not self.sender_thread:
             return
         try:
-            self.sender_thread.send(payload)
+            self.sender_thread.send(payload, priority=priority)
         except Exception:
             pass
 
@@ -3847,6 +3861,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         progress.setValue(0)
 
         def _on_cancel():
+            if state.get("closing"):
+                return
             cancel_event.set()
             self._send_action({"action": "file_upload_cancel", "file_id": file_id})
             progress.close()
@@ -3859,7 +3875,8 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             "cancel": cancel_event,
             "dialog": progress,
             "path": file_path,
-            "status": status_ref
+            "status": status_ref,
+            "closing": False
         }
         with self.upload_states_lock:
             self.upload_states[file_id] = state
@@ -3868,7 +3885,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             file_id=file_id,
             file_path=file_path,
             total_size=size,
-            send_func=self._send_action,
+            send_func=lambda payload: self._send_action(payload, priority="low"),
             ready_event=ready_event,
             cancel_event=cancel_event,
             status_ref=status_ref
@@ -3896,6 +3913,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             state = self.upload_states.pop(file_id, None)
         if not state:
             return
+        state["closing"] = True
         dialog = state.get("dialog")
         if dialog:
             dialog.setValue(dialog.maximum())
@@ -3905,6 +3923,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         with self.upload_states_lock:
             state = self.upload_states.pop(file_id, None)
         if state:
+            state["closing"] = True
             dialog = state.get("dialog")
             if dialog:
                 dialog.close()
@@ -4023,10 +4042,46 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if not os.path.exists(path):
             QtWidgets.QMessageBox.critical(self, "Ошибка", "Файл не найден")
             return
+        if self._is_dangerous_file(path):
+            self._warn_dangerous_file(path)
+            return
+        try:
+            url = QtCore.QUrl.fromLocalFile(path)
+            if QtGui.QDesktopServices.openUrl(url):
+                return
+        except Exception:
+            pass
         try:
             os.startfile(path)
         except Exception:
+            if self._open_with_dialog(path):
+                return
             QtWidgets.QMessageBox.critical(self, "Ошибка", "Не удалось открыть файл")
+
+    def _open_with_dialog(self, path):
+        try:
+            import subprocess
+            subprocess.run(
+                ["rundll32.exe", "shell32.dll,OpenAs_RunDLL", path],
+                check=False,
+                timeout=5
+            )
+            return True
+        except Exception:
+            return False
+
+    def _is_dangerous_file(self, path):
+        ext = os.path.splitext(path)[1].lower()
+        return ext == ".exe"
+
+    def _warn_dangerous_file(self, path):
+        name = os.path.basename(path)
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Предупреждение",
+            f"Файл \"{name}\" может быть опасным и не будет открыт автоматически.\n"
+            "Если вы доверяете источнику, откройте его вручную в Проводнике."
+        )
 
     def _set_file_button_download(self, button, file_id, filename, size):
         if not button:
@@ -4183,10 +4238,23 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             dialog.setValue(dialog.maximum())
             dialog.close()
         path = state.get("path")
+        expected_size = int(state.get("size") or 0)
         if path:
+            if expected_size > 0 and os.path.exists(path):
+                try:
+                    actual_size = os.path.getsize(path)
+                except Exception:
+                    actual_size = 0
+                if actual_size != expected_size:
+                    self._fail_download(
+                        file_id,
+                        f"Файл повреждён (ожидалось {expected_size} байт, получено {actual_size})"
+                    )
+                    return
             self._remember_downloaded_file(file_id, path)
             self._update_file_buttons_open(file_id, path)
-            self._open_downloaded_file(path)
+            if not self._is_dangerous_file(path):
+                self._open_downloaded_file(path)
 
     def _fail_download(self, file_id, message):
         with self.download_states_lock:
