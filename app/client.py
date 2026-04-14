@@ -37,10 +37,10 @@ if TestingMode:
     SERVER_HOST = "127.0.0.1"
     BUILD_VERSION = f"Build {CLIENT_VERSION} - Testing Mode"
 else:
-    SERVER_HOST = "26.202.145.247"
+    SERVER_HOST = "176.49.71.223"
     BUILD_VERSION = f"Build {CLIENT_VERSION}"
 
-SERVER_PORT = 5555
+SERVER_PORT = 2947
 CLANS = ["Одмен", "Новичок", "Старик", "Старейшина", "Модер"]
 CLAN_PRIMARY = {"Одмен", "Модер"}
 CLAN_SECONDARY = {"Старейшина", "Новичок", "Старик"}

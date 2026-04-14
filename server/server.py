@@ -43,7 +43,7 @@ TestingMode = False
 if TestingMode:
     DEFAULT_HOST = "127.0.0.1"
 else:
-    DEFAULT_HOST = "26.202.145.247"
+    DEFAULT_HOST = "0.0.0.0"
 
 # TLS settings
 TLS_ENABLED = False  # set False to allow plaintext TCP
@@ -166,7 +166,7 @@ class MAXutkoServer:
     def _create_tls_context(self):
         return create_tls_context(TLS_CERT_PATH, TLS_KEY_PATH)
 
-    def __init__(self, host=None, port=5555):
+    def __init__(self, host=None, port=2947):
         if host is None:
             host = DEFAULT_HOST
 
@@ -3601,7 +3601,7 @@ class MAXutkoServer:
 
 def main():
 
-    server = MAXutkoServer(host=DEFAULT_HOST, port=5555)
+    server = MAXutkoServer(host=DEFAULT_HOST, port=2947)
 
     server.start()
 
