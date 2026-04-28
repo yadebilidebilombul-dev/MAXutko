@@ -37,7 +37,7 @@ if TestingMode:
     SERVER_HOST = "127.0.0.1"
     BUILD_VERSION = f"Build {CLIENT_VERSION} - Testing Mode"
 else:
-    SERVER_HOST = "176.49.71.223"
+    SERVER_HOST = "95.188.88.216"
     BUILD_VERSION = f"Build {CLIENT_VERSION}"
 
 SERVER_PORT = 2947
