@@ -1,0 +1,56 @@
+{"timestamp": "2026-11-12T19:11:16.354750", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:11:22.618963", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:11:22.619963", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:11:22.623126", "type": "auth_request", "data": {"ip": "192.168.0.13", "payload": {"action": "token_login", "username": "", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:11:22.638314", "type": "auth_response", "data": {"username": "", "status": "error", "message": "Invalid token", "ip": "192.168.0.13", "token_issued": false}}
+{"timestamp": "2026-11-12T19:11:34.388487", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:11:34.389391", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:11:34.389391", "type": "auth_request", "data": {"ip": "192.168.0.13", "payload": {"action": "token_login", "username": "", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:11:34.389391", "type": "auth_response", "data": {"username": "", "status": "error", "message": "Invalid token", "ip": "192.168.0.13", "token_issued": false}}
+{"timestamp": "2026-11-12T19:11:56.387430", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:11:56.409439", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:11:56.410468", "type": "auth_request", "data": {"ip": "192.168.0.13", "payload": {"action": "login", "username": "iwantriker", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:11:56.411437", "type": "auth_response", "data": {"username": "", "status": "error", "message": "User not found", "ip": "192.168.0.13", "token_issued": false}}
+{"timestamp": "2026-11-12T19:13:36.278737", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:13:36.281326", "type": "auth_request", "data": {"ip": "192.168.0.13", "payload": {"action": "login", "username": "iwantriker", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:13:36.351280", "type": "auth_response", "data": {"username": "iwantriker", "status": "ok", "message": "", "ip": "192.168.0.13", "token_issued": true}}
+{"timestamp": "2026-11-12T19:13:36.352293", "type": "system_message", "data": {"message_len": 26}}
+{"timestamp": "2026-11-12T19:13:36.362643", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "get_profile", "username": "iwantriker"}}}
+{"timestamp": "2026-11-12T19:13:36.620713", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "file_request", "file_id": "31c7ad9686cbaafac38ec3a6"}}}
+{"timestamp": "2026-11-12T19:13:36.698653", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "file_request", "file_id": "9febe9b6e2ad6df226e5c570"}}}
+{"timestamp": "2026-11-12T19:13:36.728544", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "file_request", "file_id": "c07cb3441762f3e076c5cd37"}}}
+{"timestamp": "2026-11-12T19:13:36.748886", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "file_request", "file_id": "b41b5c3ced54eb2a312bda0b"}}}
+{"timestamp": "2026-11-12T19:13:36.748886", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "file_request", "file_id": "13f46267fc5ea6ea3c54c98c"}}}
+{"timestamp": "2026-11-12T19:13:36.749830", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "file_request", "file_id": "1b818c295466f511c215f6df"}}}
+{"timestamp": "2026-11-12T19:13:36.750829", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "file_request", "file_id": "e62f34d415574eb40cee6b18"}}}
+{"timestamp": "2026-11-12T19:17:39.355550", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "search_users", "query": "cz"}}}
+{"timestamp": "2026-11-12T19:17:40.494430", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "get_profile", "username": "czapla"}}}
+{"timestamp": "2026-11-12T19:17:40.495457", "type": "client_payload", "data": {"username": "iwantriker", "ip": "192.168.0.13", "payload": {"action": "get_note", "username": "czapla"}}}
+{"timestamp": "2026-11-12T19:18:14.544016", "type": "connection", "data": {"event": "accepted", "ip": "5.141.195.244"}}
+{"timestamp": "2026-11-12T19:18:14.555168", "type": "auth_request", "data": {"ip": "5.141.195.244", "payload": {"action": "token_login", "username": "", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:18:14.558195", "type": "auth_response", "data": {"username": "", "status": "error", "message": "Username already taken", "ip": "5.141.195.244", "token_issued": false}}
+{"timestamp": "2026-11-12T19:18:14.558195", "type": "connection", "data": {"event": "accepted", "ip": "5.141.195.244"}}
+{"timestamp": "2026-11-12T19:18:17.257092", "type": "connection", "data": {"event": "accepted", "ip": "5.141.195.244"}}
+{"timestamp": "2026-11-12T19:18:17.265457", "type": "connection", "data": {"event": "accepted", "ip": "5.141.195.244"}}
+{"timestamp": "2026-11-12T19:18:17.268216", "type": "auth_request", "data": {"ip": "5.141.195.244", "payload": {"action": "token_login", "username": "", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:18:17.268216", "type": "auth_response", "data": {"username": "", "status": "error", "message": "Username already taken", "ip": "5.141.195.244", "token_issued": false}}
+{"timestamp": "2026-11-12T19:18:37.031894", "type": "connection", "data": {"event": "accepted", "ip": "5.141.195.244"}}
+{"timestamp": "2026-11-12T19:18:37.047800", "type": "connection", "data": {"event": "accepted", "ip": "5.141.195.244"}}
+{"timestamp": "2026-11-12T19:18:37.048965", "type": "auth_request", "data": {"ip": "5.141.195.244", "payload": {"action": "token_login", "username": "", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:18:37.049978", "type": "auth_response", "data": {"username": "", "status": "error", "message": "Username already taken", "ip": "5.141.195.244", "token_issued": false}}
+{"timestamp": "2026-11-12T19:18:39.463765", "type": "connection", "data": {"event": "accepted", "ip": "5.141.195.244"}}
+{"timestamp": "2026-11-12T19:18:39.552723", "type": "connection", "data": {"event": "accepted", "ip": "5.141.195.244"}}
+{"timestamp": "2026-11-12T19:18:39.564034", "type": "auth_request", "data": {"ip": "5.141.195.244", "payload": {"action": "token_login", "username": "", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:18:39.565032", "type": "auth_response", "data": {"username": "", "status": "error", "message": "Username already taken", "ip": "5.141.195.244", "token_issued": false}}
+{"timestamp": "2026-11-12T19:18:44.641776", "type": "connection", "data": {"event": "accepted", "ip": "5.141.195.244"}}
+{"timestamp": "2026-11-12T19:18:44.649720", "type": "connection", "data": {"event": "accepted", "ip": "5.141.195.244"}}
+{"timestamp": "2026-11-12T19:18:44.682094", "type": "auth_request", "data": {"ip": "5.141.195.244", "payload": {"action": "token_login", "username": "", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:18:44.682094", "type": "auth_response", "data": {"username": "", "status": "error", "message": "Username already taken", "ip": "5.141.195.244", "token_issued": false}}
+{"timestamp": "2026-11-12T19:19:03.812169", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:19:03.813170", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:19:03.814152", "type": "auth_request", "data": {"ip": "192.168.0.13", "payload": {"action": "token_login", "username": "", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:19:03.815151", "type": "auth_response", "data": {"username": "", "status": "error", "message": "Username already taken", "ip": "192.168.0.13", "token_issued": false}}
+{"timestamp": "2026-11-12T19:19:09.781950", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:19:09.782516", "type": "connection", "data": {"event": "accepted", "ip": "192.168.0.13"}}
+{"timestamp": "2026-11-12T19:19:09.783454", "type": "auth_request", "data": {"ip": "192.168.0.13", "payload": {"action": "token_login", "username": "", "email": "", "client_version": "2.2.2"}}}
+{"timestamp": "2026-11-12T19:19:09.783454", "type": "auth_response", "data": {"username": "", "status": "error", "message": "Username already taken", "ip": "192.168.0.13", "token_issued": false}}

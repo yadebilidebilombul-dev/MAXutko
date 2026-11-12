@@ -130,14 +130,16 @@ class AuthWorker(QtCore.QThread):
             }) + "\n"
             sock.sendall(login_data.encode())
 
-            buffer = ""
-            while "\n" not in buffer:
-                data = sock.recv(1024).decode()
+            byte_buffer = b""
+            while b"\n" not in byte_buffer:
+                data = sock.recv(4096)
                 if not data:
                     raise Exception("Server closed")
-                buffer += data
+                byte_buffer += data
 
-            line, rest = buffer.split("\n", 1)
+            raw_line, byte_buffer = byte_buffer.split(b"\n", 1)
+            line = raw_line.decode("utf-8", errors="replace")
+            rest = byte_buffer.decode("utf-8", errors="replace")
             resp = json.loads(line)
 
             if resp.get("type") != "auth":
@@ -162,11 +164,13 @@ class ReceiverThread(QtCore.QThread):
     message_received = QtCore.pyqtSignal(dict)
     connection_lost = QtCore.pyqtSignal()
 
-    def __init__(self, sock, prebuffer=""):
+    def __init__(self, sock, prebuffer=b""):
         super().__init__()
         self.sock = sock
         self._running = True
-        self._prebuffer = prebuffer
+        if isinstance(prebuffer, str):
+            prebuffer = prebuffer.encode("utf-8")
+        self._prebuffer = prebuffer or b""
 
     def stop(self):
         self._running = False
@@ -175,16 +179,17 @@ class ReceiverThread(QtCore.QThread):
         buffer = self._prebuffer
         while self._running:
             try:
-                data = self.sock.recv(1024).decode()
-                if not data:
-                    break
-                buffer += data
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    if not line.strip():
+                while b"\n" in buffer:
+                    raw_line, buffer = buffer.split(b"\n", 1)
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
                         continue
                     msg = json.loads(line)
                     self.message_received.emit(msg)
+                data = self.sock.recv(4096)
+                if not data:
+                    break
+                buffer += data
             except Exception:
                 break
         self.connection_lost.emit()
@@ -3679,14 +3684,15 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
             self.pending_socket.send(data.encode())
 
-            buffer = ""
-            while "\n" not in buffer:
-                chunk = self.pending_socket.recv(1024).decode()
+            byte_buffer = b""
+            while b"\n" not in byte_buffer:
+                chunk = self.pending_socket.recv(4096)
                 if not chunk:
                     raise Exception("Server closed")
-                buffer += chunk
+                byte_buffer += chunk
 
-            line, _ = buffer.split("\n", 1)
+            raw_line, _ = byte_buffer.split(b"\n", 1)
+            line = raw_line.decode("utf-8", errors="replace")
             resp = json.loads(line)
 
             if resp.get("status") == "ok":
@@ -3725,14 +3731,15 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
             self.pending_socket.send(data.encode())
 
-            buffer = ""
-            while "\n" not in buffer:
-                chunk = self.pending_socket.recv(1024).decode()
+            byte_buffer = b""
+            while b"\n" not in byte_buffer:
+                chunk = self.pending_socket.recv(4096)
                 if not chunk:
                     raise Exception("Server closed")
-                buffer += chunk
+                byte_buffer += chunk
 
-            line, _ = buffer.split("\n", 1)
+            raw_line, _ = byte_buffer.split(b"\n", 1)
+            line = raw_line.decode("utf-8", errors="replace")
             resp = json.loads(line)
 
             if resp.get("status") == "ok":
@@ -3770,14 +3777,15 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
             self.pending_socket.send(data.encode())
 
-            buffer = ""
-            while "\n" not in buffer:
-                chunk = self.pending_socket.recv(1024).decode()
+            byte_buffer = b""
+            while b"\n" not in byte_buffer:
+                chunk = self.pending_socket.recv(4096)
                 if not chunk:
                     raise Exception("Server closed")
-                buffer += chunk
+                byte_buffer += chunk
 
-            line, _ = buffer.split("\n", 1)
+            raw_line, _ = byte_buffer.split(b"\n", 1)
+            line = raw_line.decode("utf-8", errors="replace")
             resp = json.loads(line)
 
             if resp.get("status") == "ok":
@@ -4025,11 +4033,16 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         return text
 
     def _make_download_path(self, filename):
-        safe_name = filename or "file"
-        base_dir = self.downloads_dir
+        raw_name = os.path.basename(filename or "file").strip()
+        safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", raw_name)
+        if not safe_name or safe_name in (".", ".."):
+            safe_name = "file"
+        base_dir = os.path.abspath(self.downloads_dir)
         os.makedirs(base_dir, exist_ok=True)
         name, ext = os.path.splitext(safe_name)
-        candidate = os.path.join(base_dir, safe_name)
+        candidate = os.path.abspath(os.path.join(base_dir, safe_name))
+        if not candidate.startswith(base_dir + os.sep):
+            candidate = os.path.join(base_dir, "file")
         counter = 1
         while os.path.exists(candidate):
             candidate = os.path.join(base_dir, f"{name} ({counter}){ext}")
@@ -4070,9 +4083,16 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         except Exception:
             return False
 
+    DANGEROUS_EXTENSIONS = {
+        ".exe", ".bat", ".cmd", ".com", ".scr", ".pif", ".vbs", ".vbe",
+        ".js", ".jse", ".wsf", ".wsh", ".ps1", ".psm1", ".msi", ".msp",
+        ".hta", ".cpl", ".msc", ".jar", ".reg", ".lnk", ".url", ".dll",
+        ".sys", ".inf", ".scf", ".sh", ".py", ".pyw", ".rb", ".pl"
+    }
+
     def _is_dangerous_file(self, path):
-        ext = os.path.splitext(path)[1].lower()
-        return ext == ".exe"
+        ext = os.path.splitext(path or "")[1].lower()
+        return ext in self.DANGEROUS_EXTENSIONS
 
     def _warn_dangerous_file(self, path):
         name = os.path.basename(path)
@@ -4253,8 +4273,6 @@ class MAXutkoClient(QtWidgets.QMainWindow):
                     return
             self._remember_downloaded_file(file_id, path)
             self._update_file_buttons_open(file_id, path)
-            if not self._is_dangerous_file(path):
-                self._open_downloaded_file(path)
 
     def _fail_download(self, file_id, message):
         with self.download_states_lock:
@@ -4414,17 +4432,12 @@ class MAXutkoClient(QtWidgets.QMainWindow):
     def _find_message_by_id(self, msg_id, scope_items=None):
         if not msg_id:
             return None
-        cached = self.message_index.get(msg_id)
-        if cached:
-            return cached
-        if scope_items is None:
-            scope_items = []
-        for item in scope_items:
-            if not isinstance(item, dict):
-                continue
-            if item.get("id") == msg_id:
-                return item
-        return None
+        if scope_items is not None:
+            for item in scope_items:
+                if isinstance(item, dict) and item.get("id") == msg_id:
+                    return item
+            return None
+        return self.message_index.get(msg_id)
 
     def _reply_preview_info(self, data):
         reply_id = data.get("reply_to")
@@ -4436,7 +4449,7 @@ class MAXutkoClient(QtWidgets.QMainWindow):
             items = self.conversations.get(f"group:{self.group_chat_target}", [])
         else:
             items = self.conversations.get(f"dm:{self.dm_target}", [])
-        original = self._find_message_by_id(reply_id, items)
+        original = self._find_message_by_id(reply_id, scope_items=items)
         if not original:
             return {
                 "title": "Ответ",
@@ -5935,19 +5948,6 @@ class MAXutkoClient(QtWidgets.QMainWindow):
 
     # ================= DISCONNECT =================
 
-        for label in self.findChildren(AvatarLabel):
-            try:
-                label._stop_decode_thread()
-            except Exception:
-                pass
-        if getattr(self, "_avatar_worker", None) is not None:
-            try:
-                if self._avatar_worker.isRunning():
-                    self._avatar_worker.wait(2000)
-            except Exception:
-                pass
-            self._avatar_worker = None
-
     def disconnect(self):
         self._disconnect_internal(show_login=True)
 
@@ -5983,6 +5983,13 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         if self.sender_thread:
             self.sender_thread.wait(2000)
             self.sender_thread = None
+        if getattr(self, "_avatar_worker", None) is not None:
+            try:
+                if self._avatar_worker.isRunning():
+                    self._avatar_worker.wait(2000)
+            except Exception:
+                pass
+            self._avatar_worker = None
         if show_login:
             self.show_login_screen()
 
@@ -6228,29 +6235,33 @@ class MAXutkoClient(QtWidgets.QMainWindow):
         """Create shortcut using PowerShell"""
         try:
             import subprocess
-            
+            safe_version = re.sub(r"[^A-Za-z0-9._-]", "_", str(version or "0.0.0"))[:32]
             desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-            shortcut_path = os.path.join(desktop_path, f"MAXutko_v{version}.lnk")
-            
-            # PowerShell script to create shortcut
-            ps_script = f"""
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortCut('{shortcut_path}')
-$Shortcut.TargetPath = '{exe_path}'
-$Shortcut.WorkingDirectory = '{os.path.dirname(exe_path)}'
-$Shortcut.Description = 'MAXutko Messenger v{version}'
-$Shortcut.Save()
-"""
-            
-            # Run PowerShell
+            shortcut_path = os.path.join(desktop_path, f"MAXutko_v{safe_version}.lnk")
+
+            env = os.environ.copy()
+            env["SC_PATH"] = shortcut_path
+            env["SC_TARGET"] = exe_path
+            env["SC_WORKDIR"] = os.path.dirname(exe_path)
+            env["SC_DESC"] = f"MAXutko Messenger v{safe_version}"
+
+            ps_script = (
+                "$WshShell = New-Object -ComObject WScript.Shell; "
+                "$Shortcut = $WshShell.CreateShortCut($env:SC_PATH); "
+                "$Shortcut.TargetPath = $env:SC_TARGET; "
+                "$Shortcut.WorkingDirectory = $env:SC_WORKDIR; "
+                "$Shortcut.Description = $env:SC_DESC; "
+                "$Shortcut.Save()"
+            )
             subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_script],
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+                env=env,
                 capture_output=True,
                 timeout=5
             )
         except Exception:
             # Fallback to batch
-            self._create_shortcut_batch(exe_path, version)
+            self._create_shortcut_batch(exe_path, safe_version)
 
     def _create_shortcut_batch(self, exe_path, version):
         """Create a batch file that can run the update"""

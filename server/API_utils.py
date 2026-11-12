@@ -1,9 +1,11 @@
+import hmac
 import json
 import os
 import re
 import secrets
 import threading
 import time
+from network_utils import atomic_write_json
 
 
 class BotAPI:
@@ -32,8 +34,7 @@ class BotAPI:
         return {}
 
     def save_bots(self):
-        with open(self.server.bots_path, "w", encoding="utf-8") as f:
-            json.dump(self.server.bots, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.server.bots_path, self.server.bots)
 
     def _bot_by_token(self, token):
         token = (token or "").strip()
@@ -41,7 +42,7 @@ class BotAPI:
             return "", None
         with self.server.bots_lock:
             for name, bot in self.server.bots.items():
-                if isinstance(bot, dict) and (bot.get("token") or "").strip() == token:
+                if isinstance(bot, dict) and hmac.compare_digest((bot.get("token") or "").strip(), token):
                     return name, dict(bot)
         return "", None
 
@@ -208,19 +209,25 @@ class BotAPI:
         changed = False
         with self.server.dm_history_lock:
             start_index = 0
+            found_last_id = False
             if last_seen_id:
                 for idx, msg in enumerate(self.server.dm_history):
                     if msg.get("id") == last_seen_id:
                         start_index = idx + 1
+                        found_last_id = True
                         break
             for msg in self.server.dm_history[start_index:]:
                 if msg.get("type") not in ("dm", "file"):
                     continue
                 if msg.get("to") != bot_name:
                     continue
+                # If last_seen_id was deleted, skip already fetched messages
+                if last_seen_id and not found_last_id and msg.get("bot_fetched", False):
+                    continue
+                msg["bot_fetched"] = True
+                changed = True
                 if not msg.get("delivered", False):
                     msg["delivered"] = True
-                    changed = True
                     to_notify.append({
                         "sender": msg.get("username"),
                         "id": msg.get("id"),

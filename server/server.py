@@ -7,6 +7,7 @@ import time
 import secrets
 import sys
 import base64
+import hmac
 from datetime import datetime
 
 SERVVERSION = "2.2.2"
@@ -20,19 +21,24 @@ from crypto_utils import (
     build_passcode,
     decrypt_token,
     encrypt_token,
+    hash_passcode,
     hash_password,
     is_modern_password_hash,
     verify_legacy_password,
+    verify_passcode,
     verify_password_hash
 )
 from network_utils import (
-    create_tls_context,
+    atomic_write_json,
+    connection_limit_exceeded,
     create_server_socket,
+    create_tls_context,
+    LineBufferExceededError,
+    recv_line,
     safe_send,
     safe_send_json,
     track_connection,
-    untrack_connection,
-    connection_limit_exceeded
+    untrack_connection
 )
 from API_utils import BotAPI
 
@@ -70,95 +76,23 @@ class ServerLogger:
     def __init__(self, log_dir="server"):
         self.log_dir = os.path.join(os.path.dirname(__file__), log_dir)
         os.makedirs(self.log_dir, exist_ok=True)
-        self.log_path = os.path.join(self.log_dir, "server.log.json")
+        self.log_path = os.path.join(self.log_dir, "server.log.jsonl")
         self.lock = threading.Lock()
-    
+
     def log(self, event_type, data):
-        """Логирует событие в JSON формате"""
+        """Логирует событие в формате JSON Lines (append-only, без чтения всего файла)"""
         log_entry = {
             "timestamp": datetime.now().isoformat(),
             "type": event_type,
             "data": data
         }
-        
+        line = json.dumps(log_entry, ensure_ascii=False) + "\n"
         with self.lock:
-            # Загрузим существующие логи
-            logs = []
-            if os.path.exists(self.log_path):
-                try:
-                    with open(self.log_path, "r", encoding="utf-8") as f:
-                        logs = json.load(f)
-                except:
-                    logs = []
-            
-            logs.append(log_entry)
-            
-            # Ограничим размер до последних 50000 записей
-            if len(logs) > 50000:
-                logs = logs[-50000:]
-            
-            # Сохраним логи
             try:
-                with open(self.log_path, "w", encoding="utf-8") as f:
-                    json.dump(logs, f, ensure_ascii=False, indent=2)
+                with open(self.log_path, "a", encoding="utf-8") as f:
+                    f.write(line)
             except Exception as e:
                 print(f"[!] Ошибка логирования: {e}")
-    
-    def log_auth(self, username, action, status, ip="", error=""):
-        """Логирует действие аутентификации"""
-        self.log("auth", {
-            "username": username,
-            "action": action,
-            "status": status,
-            "ip": ip,
-            "error": error
-        })
-    
-    def log_user_action(self, username, action, target="", details=""):
-        """Логирует пользовательское действие"""
-        self.log("user_action", {
-            "username": username,
-            "action": action,
-            "target": target,
-            "details": details
-        })
-    
-    def log_file_operation(self, username, operation, file_id, filename, size=0, status=""):
-        """Логирует операции с файлами"""
-        self.log("file", {
-            "username": username,
-            "operation": operation,
-            "file_id": file_id,
-            "filename": filename,
-            "size": size,
-            "status": status
-        })
-    
-    def log_error(self, username, error_type, message, context=""):
-        """Логирует ошибку"""
-        self.log("error", {
-            "username": username,
-            "error_type": error_type,
-            "message": message,
-            "context": context
-        })
-    
-    def log_security_event(self, event_type, ip="", details=""):
-        """Логирует события безопасности"""
-        self.log("security", {
-            "event": event_type,
-            "ip": ip,
-            "details": details
-        })
-    
-    def log_group_action(self, username, action, group_id, details=""):
-        """Логирует действия с группами"""
-        self.log("group", {
-            "username": username,
-            "action": action,
-            "group_id": group_id,
-            "details": details
-        })
 
 
 class MAXutkoServer:
@@ -498,9 +432,7 @@ class MAXutkoServer:
 
 
     def save_accounts(self):
-
-        with open(self.accounts_path, "w", encoding="utf-8") as f:
-            json.dump(self.accounts, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.accounts_path, self.accounts)
 
     def load_tokens(self):
         if not os.path.exists(self.tokens_path):
@@ -522,8 +454,7 @@ class MAXutkoServer:
         return {}
 
     def save_tokens(self):
-        with open(self.tokens_path, "w", encoding="utf-8") as f:
-            json.dump(self.tokens, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.tokens_path, self.tokens)
 
     def _current_server_version(self):
         return (SERVVERSION or "0.0.0").strip()
@@ -621,8 +552,7 @@ class MAXutkoServer:
         return {}
 
     def save_file_index(self):
-        with open(self.file_index_path, "w", encoding="utf-8") as f:
-            json.dump(self.file_index, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.file_index_path, self.file_index)
 
     def load_groups(self):
         if not os.path.exists(self.groups_path):
@@ -666,8 +596,7 @@ class MAXutkoServer:
         return {"version": "0.0.0", "changelog": ""}
 
     def save_groups(self):
-        with open(self.groups_path, "w", encoding="utf-8") as f:
-            json.dump(self.groups, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.groups_path, self.groups)
 
     def _search_groups(self, query):
         q = (query or "").strip().casefold()
@@ -746,7 +675,7 @@ class MAXutkoServer:
             return ""
         with self.accounts_lock:
             for name, acc in self.accounts.items():
-                if (acc.get("passcode_hash") or "").strip() == passcode:
+                if verify_passcode(acc.get("passcode_hash"), passcode):
                     return name
         return ""
 
@@ -891,7 +820,6 @@ class MAXutkoServer:
             "ip": ip,
             "details": f"duration={self.bruteforce_block_duration}"
         })
-        self._deauth_ip(ip, "Disconnected due to brute force activity from your IP.")
 
 
     def _deauth_ip(self, ip, reason=""):
@@ -1060,15 +988,6 @@ class MAXutkoServer:
             f"Код отправлен на почту профиля: {masked}",
             mode="change"
         )
-        with self.accounts_lock:
-            acc = self.accounts.get(username)
-            if not acc:
-                self.send_passcode(client, "error", "Пользователь не найден", mode="create")
-                return
-            acc["passcode_hash"] = passcode_value
-            self.accounts[username] = acc
-            self.save_accounts()
-        self.send_passcode(client, "ok", "PassCodeHash готов", mode="create", passcode=passcode_value)
 
     def _handle_passcode_verify(self, client, username, code, mode):
         mode = (mode or "").strip().lower()
@@ -1099,12 +1018,13 @@ class MAXutkoServer:
         if not passcode_value:
             self.send_passcode(client, "error", "Не удалось создать код", mode=mode)
             return
+        passcode_hashed = hash_passcode(passcode_value)
         with self.accounts_lock:
             acc = self.accounts.get(username)
             if not acc:
                 self.send_passcode(client, "error", "Пользователь не найден", mode=mode)
                 return
-            acc["passcode_hash"] = passcode_value
+            acc["passcode_hash"] = passcode_hashed
             self.accounts[username] = acc
             self.save_accounts()
         self.send_passcode(client, "ok", "PassCodeHash готов", mode=mode, passcode=passcode_value)
@@ -1154,9 +1074,7 @@ class MAXutkoServer:
 
 
     def save_notes(self):
-
-        with open(self.notes_path, "w", encoding="utf-8") as f:
-            json.dump(self.notes, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.notes_path, self.notes)
 
     # ================= ACCOUNT BLOCKS =================
 
@@ -1186,8 +1104,7 @@ class MAXutkoServer:
         return {}
 
     def save_account_blocks(self):
-        with open(self.account_blocks_path, "w", encoding="utf-8") as f:
-            json.dump(self.account_blocks, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.account_blocks_path, self.account_blocks)
 
     def _account_block_status(self, username):
         if not username:
@@ -1288,9 +1205,7 @@ class MAXutkoServer:
 
 
     def save_history(self):
-
-        with open(self.history_path, "w", encoding="utf-8") as f:
-            json.dump(self.history, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.history_path, self.history)
 
 
     def append_history(self, data):
@@ -1377,8 +1292,7 @@ class MAXutkoServer:
         return {}
 
     def save_contacts(self):
-        with open(self.contacts_path, "w", encoding="utf-8") as f:
-            json.dump(self.contacts, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.contacts_path, self.contacts)
 
     def _user_exists(self, username):
         if not username:
@@ -1620,9 +1534,7 @@ class MAXutkoServer:
 
 
     def save_dm_history(self):
-
-        with open(self.dm_history_path, "w", encoding="utf-8") as f:
-            json.dump(self.dm_history, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.dm_history_path, self.dm_history)
 
 
     def append_dm_history(self, data):
@@ -1708,9 +1620,7 @@ class MAXutkoServer:
 
 
     def save_receipts(self):
-
-        with open(self.receipts_path, "w", encoding="utf-8") as f:
-            json.dump(self.receipts_pending, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.receipts_path, self.receipts_pending)
 
 
     def send_dm_receipt(self, username, msg_id, delivered=None, read=None):
@@ -2114,17 +2024,13 @@ class MAXutkoServer:
                 self.send_auth(client, "need_code", "Code sent to email")
 
                 # Wait for verify
+                byte_buffer = b""
                 while True:
-                    data = client.recv(1024).decode()
-                    if not data:
+                    line, byte_buffer = recv_line(client, byte_buffer)
+                    if line is None:
                         client.close()
                         return
 
-                    buffer += data
-                    if "\n" not in buffer:
-                        continue
-
-                    line, buffer = buffer.split("\n", 1)
                     if not line.strip():
                         continue
 
@@ -2137,7 +2043,7 @@ class MAXutkoServer:
                         client.close()
                         return
 
-                    v_user = verify.get("username", "").strip()
+                    v_user = username
                     v_code = verify.get("code", "").strip()
 
                     with self.pending_lock:
@@ -2154,7 +2060,14 @@ class MAXutkoServer:
                             client.close()
                             return
 
-                        if v_code != pending["code"]:
+                        pending["attempts"] = pending.get("attempts", 0) + 1
+                        if pending["attempts"] > 5:
+                            del self.pending[v_user]
+                            self.send_auth(client, "error", "Too many attempts")
+                            client.close()
+                            return
+
+                        if not hmac.compare_digest(v_code, pending["code"]):
                             self.send_auth(client, "error", "Wrong code")
                             client.close()
                             return
@@ -2223,17 +2136,13 @@ class MAXutkoServer:
                 
                 self.send_auth(client, "need_code", "Code sent to email")
 
+                byte_buffer = b""
                 while True:
-                    data = client.recv(1024).decode()
-                    if not data:
+                    line, byte_buffer = recv_line(client, byte_buffer)
+                    if line is None:
                         client.close()
                         return
 
-                    buffer += data
-                    if "\n" not in buffer:
-                        continue
-
-                    line, buffer = buffer.split("\n", 1)
                     if not line.strip():
                         continue
 
@@ -2247,7 +2156,7 @@ class MAXutkoServer:
                         client.close()
                         return
 
-                    v_user = verify.get("username", "").strip()
+                    v_user = username
                     v_code = verify.get("code", "").strip()
 
                     with self.reset_pending_lock:
@@ -2262,7 +2171,13 @@ class MAXutkoServer:
                             self.send_auth(client, "error", "Code expired")
                             continue
 
-                        if v_code and v_code != pending["code"]:
+                        pending["attempts"] = pending.get("attempts", 0) + 1
+                        if pending["attempts"] > 5:
+                            del self.reset_pending[v_user]
+                            self.send_auth(client, "error", "Too many attempts")
+                            continue
+
+                        if not v_code or not hmac.compare_digest(v_code, pending["code"]):
                             self.send_auth(client, "error", "Wrong code")
                             continue
 
@@ -2272,8 +2187,8 @@ class MAXutkoServer:
                             self.send_auth(client, "ok", "Code verified")
                             continue
 
-                        if not v_code and not pending.get("verified"):
-                            self.send_auth(client, "error", "Wrong code")
+                        if not pending.get("verified"):
+                            self.send_auth(client, "error", "Code not verified")
                             continue
 
                         del self.reset_pending[v_user]
@@ -2369,623 +2284,629 @@ class MAXutkoServer:
 
             # ---- MAIN LOOP ----
 
+            byte_buffer = b""
             while True:
-
-                data = client.recv(1024).decode()
-
-                if not data:
+                try:
+                    line, byte_buffer = recv_line(client, byte_buffer)
+                except LineBufferExceededError:
                     break
 
-                buffer += data
+                if line is None:
+                    break
 
-                while "\n" in buffer:
+                if not line.strip():
+                    continue
 
-                    line, buffer = buffer.split("\n", 1)
+                msg = json.loads(line)
+                action = msg.get("action")
+                if action != "file_upload_chunk":
+                    self._log_client_payload(username, ip, msg)
 
-                    if not line.strip():
+                msg_type = msg.get("type")
+                if msg_type == "dm_read":
+                    msg_id = msg.get("id", "")
+                    self.mark_dm_read(username, msg_id)
+                    continue
+
+                if action:
+                    if action == "file_upload_start":
+                        self._handle_file_upload_start(username, msg, client)
                         continue
-
-                    msg = json.loads(line)
-                    action = msg.get("action")
-                    if action != "file_upload_chunk":
-                        self._log_client_payload(username, ip, msg)
-
-                    msg_type = msg.get("type")
-                    if msg_type == "dm_read":
-                        msg_id = msg.get("id", "")
-                        self.mark_dm_read(username, msg_id)
+                    if action == "file_upload_chunk":
+                        self._handle_file_upload_chunk(username, msg, client)
                         continue
-
-                    if action:
-                        if action == "file_upload_start":
-                            self._handle_file_upload_start(username, msg, client)
+                    if action == "file_upload_end":
+                        self._handle_file_upload_end(username, msg, client)
+                        continue
+                    if action == "file_upload_cancel":
+                        self._handle_file_upload_cancel(username, msg, client)
+                        continue
+                    if action == "file_request":
+                        self._handle_file_request(username, msg, client)
+                        continue
+                    if action == "passcode_status":
+                        self._handle_passcode_status(client, username)
+                        continue
+                    if action == "passcode_create_request":
+                        if not self._rate_limit(f"passcode:create:{ip}", 6, 60):
+                            self.send_passcode(client, "error", "Слишком много попыток", mode="create")
                             continue
-                        if action == "file_upload_chunk":
-                            self._handle_file_upload_chunk(username, msg, client)
+                        self._handle_passcode_create_request(
+                            client,
+                            username,
+                            msg.get("password", "")
+                        )
+                        continue
+                    if action == "passcode_create_verify":
+                        if not self._rate_limit(f"passcode:create_verify:{ip}", 10, 60):
+                            self.send_passcode(client, "error", "Слишком много попыток", mode="create")
                             continue
-                        if action == "file_upload_end":
-                            self._handle_file_upload_end(username, msg, client)
+                        self._handle_passcode_verify(client, username, msg.get("code", ""), "create")
+                        continue
+                    if action == "passcode_reset_request":
+                        if not self._rate_limit(f"passcode:reset:{ip}", 6, 60):
+                            self.send_passcode(client, "error", "Слишком много попыток", mode="reset")
                             continue
-                        if action == "file_upload_cancel":
-                            self._handle_file_upload_cancel(username, msg, client)
+                        self._handle_passcode_reset(client, username, msg.get("password", ""))
+                        continue
+                    if action == "passcode_change":
+                        if not self._rate_limit(f"passcode:change:{ip}", 10, 60):
+                            self.send_passcode(client, "error", "Слишком много попыток", mode="change")
                             continue
-                        if action == "file_request":
-                            self._handle_file_request(username, msg, client)
+                        self._handle_passcode_change_request(
+                            client,
+                            username,
+                            msg.get("password", "")
+                        )
+                        continue
+                    if action == "passcode_change_verify":
+                        if not self._rate_limit(f"passcode:change_verify:{ip}", 10, 60):
+                            self.send_passcode(client, "error", "Слишком много попыток", mode="change")
                             continue
-                        if action == "passcode_status":
-                            self._handle_passcode_status(client, username)
-                            continue
-                        if action == "passcode_create_request":
-                            if not self._rate_limit(f"passcode:create:{ip}", 6, 60):
-                                self.send_passcode(client, "error", "Слишком много попыток", mode="create")
-                                continue
-                            self._handle_passcode_create_request(
-                                client,
-                                username,
-                                msg.get("password", "")
-                            )
-                            continue
-                        if action == "passcode_create_verify":
-                            if not self._rate_limit(f"passcode:create_verify:{ip}", 10, 60):
-                                self.send_passcode(client, "error", "Слишком много попыток", mode="create")
-                                continue
-                            self._handle_passcode_verify(client, username, msg.get("code", ""), "create")
-                            continue
-                        if action == "passcode_reset_request":
-                            if not self._rate_limit(f"passcode:reset:{ip}", 6, 60):
-                                self.send_passcode(client, "error", "Слишком много попыток", mode="reset")
-                                continue
-                            self._handle_passcode_reset(client, username, msg.get("password", ""))
-                            continue
-                        if action == "passcode_change":
-                            if not self._rate_limit(f"passcode:change:{ip}", 10, 60):
-                                self.send_passcode(client, "error", "Слишком много попыток", mode="change")
-                                continue
-                            self._handle_passcode_change_request(
-                                client,
-                                username,
-                                msg.get("password", "")
-                            )
-                            continue
-                        if action == "passcode_change_verify":
-                            if not self._rate_limit(f"passcode:change_verify:{ip}", 10, 60):
-                                self.send_passcode(client, "error", "Слишком много попыток", mode="change")
-                                continue
-                            self._handle_passcode_verify(client, username, msg.get("code", ""), "change")
-                            continue
-                        if action == "get_profile":
-                            target = (msg.get("username") or "").strip()
-                            acc = self._refresh_account_clan_for_user(target)
+                        self._handle_passcode_verify(client, username, msg.get("code", ""), "change")
+                        continue
+                    if action == "get_profile":
+                        target = (msg.get("username") or "").strip()
+                        acc = self._refresh_account_clan_for_user(target)
+                        if acc:
+                            profile = dict(acc.get("profile") or {})
+                        else:
+                            profile = {"nick": "", "about": "", "avatar": "", "clan_primary": "", "clan_secondary": "Новичок"}
+                        payload = {
+                            "type": "profile",
+                            "username": target,
+                            "profile": profile
+                        }
+                        self._safe_send_json(client, payload)
+                        continue
+                    if action == "update_profile":
+                        nick = msg.get("nick")
+                        about = msg.get("about")
+                        avatar = msg.get("avatar")
+                        with self.accounts_lock:
+                            acc = self.accounts.get(username)
                             if acc:
                                 profile = dict(acc.get("profile") or {})
-                            else:
-                                profile = {"nick": "", "about": "", "avatar": "", "clan_primary": "", "clan_secondary": "Новичок"}
-                            payload = {
-                                "type": "profile",
-                                "username": target,
-                                "profile": profile
-                            }
-                            self._safe_send_json(client, payload)
+                                # SEC-003: Validate profile field sizes
+                                if isinstance(nick, str):
+                                    profile["nick"] = nick[:self.max_profile_nick_size]
+                                if isinstance(about, str):
+                                    profile["about"] = about[:self.max_profile_about_size]
+                                if isinstance(avatar, str):
+                                    if len(avatar) <= self.max_profile_avatar_size:
+                                        profile["avatar"] = avatar
+                                acc["profile"] = profile
+                                self.accounts[username] = acc
+                                self.save_accounts()
+                        self.send_all_contacts()
+                        continue
+                    if action == "search_users":
+                        query = (msg.get("query") or "").strip()
+                        results = self._search_users(query, requester=username)
+                        groups = self._search_groups(query)
+                        payload = {
+                            "type": "search_results",
+                            "query": query,
+                            "results": results,
+                            "groups": groups
+                        }
+                        self._safe_send_json(client, payload)
+                        continue
+                    if action == "create_group":
+                        name = (msg.get("name") or "").strip()
+                        private = bool(msg.get("private", False))
+                        if not name:
+                            self._safe_send_json(client, {"type": "group_created", "status": "error", "message": "Введите название"})
                             continue
-                        if action == "update_profile":
-                            nick = msg.get("nick")
-                            about = msg.get("about")
-                            avatar = msg.get("avatar")
-                            with self.accounts_lock:
-                                acc = self.accounts.get(username)
-                                if acc:
-                                    profile = dict(acc.get("profile") or {})
-                                    # SEC-003: Validate profile field sizes
-                                    if isinstance(nick, str):
-                                        profile["nick"] = nick[:self.max_profile_nick_size]
-                                    if isinstance(about, str):
-                                        profile["about"] = about[:self.max_profile_about_size]
-                                    if isinstance(avatar, str):
-                                        if len(avatar) <= self.max_profile_avatar_size:
-                                            profile["avatar"] = avatar
-                                    acc["profile"] = profile
-                                    self.accounts[username] = acc
-                                    self.save_accounts()
-                            self.send_all_contacts()
+                        gid = secrets.token_hex(8)
+                        group = {
+                            "id": gid,
+                            "name": name[:80],
+                            "owner": username,
+                            "private": bool(private),
+                            "members": [username],
+                            "invites": [],
+                            "created_at": int(time.time())
+                        }
+                        with self.groups_lock:
+                            self.groups[gid] = group
+                            self.save_groups()
+                        self._safe_send_json(client, {"type": "group_created", "status": "ok", "group": group})
+                        continue
+                    if action == "join_group":
+                        gid = (msg.get("group_id") or "").strip()
+                        if not gid:
                             continue
-                        if action == "search_users":
-                            query = (msg.get("query") or "").strip()
-                            results = self._search_users(query, requester=username)
-                            groups = self._search_groups(query)
-                            payload = {
-                                "type": "search_results",
-                                "query": query,
-                                "results": results,
-                                "groups": groups
-                            }
-                            self._safe_send_json(client, payload)
-                            continue
-                        if action == "create_group":
-                            name = (msg.get("name") or "").strip()
-                            private = bool(msg.get("private", False))
-                            if not name:
-                                self._safe_send_json(client, {"type": "group_created", "status": "error", "message": "Введите название"})
+                        with self.groups_lock:
+                            grp = self.groups.get(gid)
+                            if not grp:
+                                self._safe_send_json(client, {"type": "group_joined", "status": "error", "message": "Группа не найдена"})
                                 continue
-                            gid = secrets.token_hex(8)
-                            group = {
-                                "id": gid,
-                                "name": name[:80],
-                                "owner": username,
-                                "private": bool(private),
-                                "members": [username],
-                                "invites": [],
-                                "created_at": int(time.time())
-                            }
-                            with self.groups_lock:
-                                self.groups[gid] = group
-                                self.save_groups()
-                            self._safe_send_json(client, {"type": "group_created", "status": "ok", "group": group})
-                            continue
-                        if action == "join_group":
-                            gid = (msg.get("group_id") or "").strip()
-                            if not gid:
+                            if grp.get("private"):
+                                self._safe_send_json(client, {"type": "group_joined", "status": "error", "message": "Группа приватная"})
                                 continue
-                            with self.groups_lock:
-                                grp = self.groups.get(gid)
-                                if not grp:
-                                    self._safe_send_json(client, {"type": "group_joined", "status": "error", "message": "Группа не найдена"})
-                                    continue
-                                if grp.get("private"):
-                                    self._safe_send_json(client, {"type": "group_joined", "status": "error", "message": "Группа приватная"})
-                                    continue
-                                members = set(grp.get("members") or [])
-                                if username in members:
-                                    self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
-                                    continue
-                                members.add(username)
-                                grp["members"] = list(members)
+                            members = set(grp.get("members") or [])
+                            if username in members:
+                                self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
+                                continue
+                            members.add(username)
+                            grp["members"] = list(members)
+                            self.groups[gid] = grp
+                            self.save_groups()
+                        self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
+                        self.send_user_groups(client, username)
+                        self.send_group_message_history(client, username)
+                        continue
+                    if action == "leave_group":
+                        gid = (msg.get("group_id") or "").strip()
+                        if not gid:
+                            continue
+                        deleted = False
+                        new_owner = ""
+                        with self.groups_lock:
+                            grp = self.groups.get(gid)
+                            if not grp:
+                                self._safe_send_json(client, {"type": "group_left", "status": "error", "message": "Группа не найдена", "group_id": gid})
+                                continue
+                            members = list(grp.get("members") or [])
+                            if username not in members:
+                                self._safe_send_json(client, {"type": "group_left", "status": "error", "message": "Вы не состоите в группе", "group_id": gid})
+                                continue
+                            members = [m for m in members if m != username]
+                            grp["members"] = members
+                            invites = [u for u in (grp.get("invites") or []) if u != username]
+                            grp["invites"] = invites
+                            if grp.get("owner") == username:
+                                if members:
+                                    new_owner = members[0]
+                                    grp["owner"] = new_owner
+                                else:
+                                    deleted = True
+                                    del self.groups[gid]
+                            if not deleted:
                                 self.groups[gid] = grp
-                                self.save_groups()
-                            self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
-                            self.send_user_groups(client, username)
-                            self.send_group_message_history(client, username)
+                            self.save_groups()
+                        self._safe_send_json(client, {"type": "group_left", "status": "ok", "group_id": gid, "deleted": deleted, "new_owner": new_owner})
+                        continue
+                    if action == "invite_group":
+                        gid = (msg.get("group_id") or "").strip()
+                        target = (msg.get("username") or "").strip()
+                        if not gid or not target:
+                            self._safe_send_json(client, {
+                                "type": "group_invite_result",
+                                "status": "error",
+                                "message": "Некорректные данные приглашения"
+                            })
                             continue
-                        if action == "leave_group":
-                            gid = (msg.get("group_id") or "").strip()
-                            if not gid:
-                                continue
-                            deleted = False
-                            new_owner = ""
-                            with self.groups_lock:
-                                grp = self.groups.get(gid)
-                                if not grp:
-                                    self._safe_send_json(client, {"type": "group_left", "status": "error", "message": "Группа не найдена", "group_id": gid})
-                                    continue
-                                members = list(grp.get("members") or [])
-                                if username not in members:
-                                    self._safe_send_json(client, {"type": "group_left", "status": "error", "message": "Вы не состоите в группе", "group_id": gid})
-                                    continue
-                                members = [m for m in members if m != username]
-                                grp["members"] = members
-                                invites = [u for u in (grp.get("invites") or []) if u != username]
-                                grp["invites"] = invites
-                                if grp.get("owner") == username:
-                                    if members:
-                                        new_owner = members[0]
-                                        grp["owner"] = new_owner
-                                    else:
-                                        deleted = True
-                                        del self.groups[gid]
-                                if not deleted:
-                                    self.groups[gid] = grp
-                                self.save_groups()
-                            self._safe_send_json(client, {"type": "group_left", "status": "ok", "group_id": gid, "deleted": deleted, "new_owner": new_owner})
-                            continue
-                        if action == "invite_group":
-                            gid = (msg.get("group_id") or "").strip()
-                            target = (msg.get("username") or "").strip()
-                            if not gid or not target:
+                        with self.groups_lock:
+                            grp = self.groups.get(gid)
+                            if not grp:
                                 self._safe_send_json(client, {
                                     "type": "group_invite_result",
                                     "status": "error",
-                                    "message": "Некорректные данные приглашения"
+                                    "message": "Группа не найдена"
                                 })
                                 continue
-                            with self.groups_lock:
-                                grp = self.groups.get(gid)
-                                if not grp:
-                                    self._safe_send_json(client, {
-                                        "type": "group_invite_result",
-                                        "status": "error",
-                                        "message": "Группа не найдена"
-                                    })
-                                    continue
-                                members = set(grp.get("members") or [])
-                                if username not in members:
-                                    self._safe_send_json(client, {
-                                        "type": "group_invite_result",
-                                        "status": "error",
-                                        "message": "Недостаточно прав для приглашения"
-                                    })
-                                    continue
-                                invites = set(grp.get("invites") or [])
-                                if target in members or target in invites:
-                                    self._safe_send_json(client, {
-                                        "type": "group_invite_result",
-                                        "status": "error",
-                                        "message": "Пользователь уже в группе или уже приглашен"
-                                    })
-                                    continue
-                                invites.add(target)
-                                grp["invites"] = list(invites)
-                                self.groups[gid] = grp
-                                self.save_groups()
-                            # notify target if online
-                            target_sock = self._socket_by_username(target)
-                            payload = {"type": "group_invite", "from": username, "group": grp}
-                            if target_sock:
-                                self._safe_send_json(target_sock, payload)
-                            self._safe_send_json(client, {
-                                "type": "group_invite_result",
-                                "status": "ok",
-                                "group_id": gid,
-                                "username": target
-                            })
-                            continue
-                        if action == "accept_group_invite":
-                            gid = (msg.get("group_id") or "").strip()
-                            if not gid:
+                            if grp.get("private") and grp.get("owner") != username:
+                                self._safe_send_json(client, {
+                                    "type": "group_invite_result",
+                                    "status": "error",
+                                    "message": "В приватную группу может приглашать только владелец"
+                                })
                                 continue
-                            with self.groups_lock:
-                                grp = self.groups.get(gid)
-                                if not grp:
+                            members = set(grp.get("members") or [])
+                            if username not in members:
+                                self._safe_send_json(client, {
+                                    "type": "group_invite_result",
+                                    "status": "error",
+                                    "message": "Недостаточно прав для приглашения"
+                                })
+                                continue
+                            invites = set(grp.get("invites") or [])
+                            if target in members or target in invites:
+                                self._safe_send_json(client, {
+                                    "type": "group_invite_result",
+                                    "status": "error",
+                                    "message": "Пользователь уже в группе или уже приглашен"
+                                })
+                                continue
+                            invites.add(target)
+                            grp["invites"] = list(invites)
+                            self.groups[gid] = grp
+                            self.save_groups()
+                        # notify target if online
+                        target_sock = self._socket_by_username(target)
+                        payload = {"type": "group_invite", "from": username, "group": grp}
+                        if target_sock:
+                            self._safe_send_json(target_sock, payload)
+                        self._safe_send_json(client, {
+                            "type": "group_invite_result",
+                            "status": "ok",
+                            "group_id": gid,
+                            "username": target
+                        })
+                        continue
+                    if action == "accept_group_invite":
+                        gid = (msg.get("group_id") or "").strip()
+                        if not gid:
+                            continue
+                        with self.groups_lock:
+                            grp = self.groups.get(gid)
+                            if not grp:
+                                continue
+                            invites = set(grp.get("invites") or [])
+                            if username not in invites:
+                                continue
+                            invites.discard(username)
+                            members = set(grp.get("members") or [])
+                            members.add(username)
+                            grp["invites"] = list(invites)
+                            grp["members"] = list(members)
+                            self.groups[gid] = grp
+                            self.save_groups()
+                        self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
+                        self.send_user_groups(client, username)
+                        self.send_group_message_history(client, username)
+                        # notify other members (best-effort)
+                        with self.clients_lock:
+                            for sock, name in list(self.clients.items()):
+                                if name in grp.get("members", []) and name != username:
+                                    try:
+                                        self._safe_send_json(sock, {"type": "group_member_added", "group": grp, "username": username})
+                                    except Exception:
+                                        pass
+                        continue
+                    if action == "send_group_message":
+                        gid = (msg.get("group_id") or "").strip()
+                        text = msg.get("message", "")
+                        reply_to = msg.get("reply_to")
+                        if not gid or not text:
+                            if gid:
+                                self.log_group_action(username, "send_message_denied", gid, "invalid_message")
+                                self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Invalid message"})
+                            continue
+                        # SEC-003: Validate message size
+                        if isinstance(text, str) and len(text) > self.max_message_size:
+                            continue
+                        with self.groups_lock:
+                            grp = self.groups.get(gid)
+                            if not grp:
+                                self.log_group_action(username, "send_message_denied", gid, "group_not_found")
+                                self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Group not found"})
+                                continue
+                            members = set(grp.get("members") or [])
+                            if username not in members:
+                                if grp.get("private"):
+                                    self.log_group_action(username, "send_message_denied", gid, "not_in_group")
+                                    self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Not in group"})
                                     continue
-                                invites = set(grp.get("invites") or [])
-                                if username not in invites:
-                                    continue
-                                invites.discard(username)
-                                members = set(grp.get("members") or [])
                                 members.add(username)
-                                grp["invites"] = list(invites)
                                 grp["members"] = list(members)
                                 self.groups[gid] = grp
                                 self.save_groups()
-                            self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
-                            # notify other members (best-effort)
-                            with self.clients_lock:
-                                for sock, name in list(self.clients.items()):
-                                    if name in grp.get("members", []) and name != username:
-                                        try:
-                                            self._safe_send_json(sock, {"type": "group_member_added", "group": grp, "username": username})
-                                        except Exception:
-                                            pass
-                            continue
-                        if action == "send_group_message":
-                            gid = (msg.get("group_id") or "").strip()
-                            text = msg.get("message", "")
-                            reply_to = msg.get("reply_to")
-                            if not gid or not text:
-                                if gid:
-                                    self.log_group_action(username, "send_message_denied", gid, "invalid_message")
-                                    self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Invalid message"})
-                                continue
-                            # SEC-003: Validate message size
-                            if isinstance(text, str) and len(text) > self.max_message_size:
-                                continue
-                            with self.groups_lock:
-                                grp = self.groups.get(gid)
-                                if not grp:
-                                    self.log_group_action(username, "send_message_denied", gid, "group_not_found")
-                                    self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Group not found"})
-                                    continue
-                                members = set(grp.get("members") or [])
-                                if username not in members:
-                                    if grp.get("private"):
-                                        self.log_group_action(username, "send_message_denied", gid, "not_in_group")
-                                        self._safe_send_json(client, {"type": "group_message_reject", "group_id": gid, "message": "Not in group"})
-                                        continue
-                                    members.add(username)
-                                    grp["members"] = list(members)
-                                    self.groups[gid] = grp
-                                    self.save_groups()
-                                    self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
-                                    self.send_user_groups(client, username)
-                                    self.send_group_message_history(client, username)
-                            # broadcast to group members
-                            msg_id = secrets.token_hex(12)
-                            data = {
-                                "id": msg_id,
-                                "username": username,
-                                "group_id": gid,
-                                "message": text,
-                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "type": "group_message"
-                            }
-                            if reply_to:
-                                data["reply_to"] = reply_to
-                            # store in dm_history for persistence
-                            self.append_dm_history(dict(data))
-                            # send to all members
-                            with self.clients_lock:
-                                for sock, name in list(self.clients.items()):
-                                    if name in members:
-                                        self._safe_send_json(sock, data)
-                            continue
-                        if action == "add_contact":
-                            target = (msg.get("username") or "").strip()
-                            if target and target != username:
-                                if self._is_spam_warned(username) and not self._has_contact(username, target):
-                                    self._safe_send_json(client, {
-                                        "type": "add_contact_result",
-                                        "status": "error",
-                                        "username": target,
-                                        "message": "Вы не можете писать новым пользователям и добавлять их в контакты. Если вы считаете, что это ошибка, свяжитесь с поддержкой: moro23728@gmail.com"
-                                    })
-                                    continue
-                                self._add_contact_pair(username, target)
-                                sender_sock = self._socket_by_username(username)
-                                target_sock = self._socket_by_username(target)
-                                if sender_sock:
-                                    self.send_contacts(sender_sock, username)
-                                if target_sock:
-                                    self.send_contacts(target_sock, target)
-                            continue
-                        if action == "remove_contact":
-                            target = (msg.get("username") or "").strip()
-                            if target and target != username:
-                                self._remove_contact_pair(username, target)
-                                sender_sock = self._socket_by_username(username)
-                                target_sock = self._socket_by_username(target)
-                                if sender_sock:
-                                    self.send_contacts(sender_sock, username)
-                                if target_sock:
-                                    self.send_contacts(target_sock, target)
-                            continue
-                        if action == "get_note":
-                            target = (msg.get("username") or "").strip()
-                            note = self.get_note(username, target) if target else ""
-                            payload = {
-                                "type": "note",
-                                "username": target,
-                                "note": note
-                            }
-                            self._safe_send_json(client, payload)
-                            continue
-                        if action == "set_note":
-                            target = (msg.get("username") or "").strip()
-                            note = msg.get("note")
-                            if target and isinstance(note, str):
-                                self.set_note(username, target, note[:1000])
-                            continue
-                        if action == "set_clan":
-                            target = (msg.get("username") or "").strip()
-                            new_clan = (msg.get("clan") or "").strip()
-                            level = (msg.get("level") or "").strip().lower()
-                            if not target or not new_clan:
-                                continue
-                            requester = self._refresh_account_clan_for_user(username)
-                            if not requester:
-                                continue
-                            if self._get_account_clan(requester) != "Одмен":
-                                continue
-                            if level not in ("primary", "secondary"):
-                                level = "secondary"
-                            if len(new_clan) > 32:
-                                new_clan = new_clan[:32]
-                            with self.accounts_lock:
-                                acc = self.accounts.get(target)
-                                if not acc:
-                                    continue
-                                profile = dict(acc.get("profile") or {})
-                                if level == "primary":
-                                    profile["clan_primary"] = new_clan
-                                else:
-                                    profile["clan_secondary"] = new_clan
-                                acc["profile"] = profile
-                                self.accounts[target] = acc
-                                self.save_accounts()
-                            continue
-                        if action == "admin_list_users":
-                            if not self._is_admin_account(username):
+                                self._safe_send_json(client, {"type": "group_joined", "status": "ok", "group": grp})
+                                self.send_user_groups(client, username)
+                                self.send_group_message_history(client, username)
+                        # broadcast to group members
+                        msg_id = secrets.token_hex(12)
+                        data = {
+                            "id": msg_id,
+                            "username": username,
+                            "group_id": gid,
+                            "message": text,
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "type": "group_message"
+                        }
+                        if reply_to:
+                            data["reply_to"] = reply_to
+                        # store in dm_history for persistence
+                        self.append_dm_history(dict(data))
+                        # send to all members
+                        with self.clients_lock:
+                            for sock, name in list(self.clients.items()):
+                                if name in members:
+                                    self._safe_send_json(sock, data)
+                        continue
+                    if action == "add_contact":
+                        target = (msg.get("username") or "").strip()
+                        if target and target != username:
+                            if self._is_spam_warned(username) and not self._has_contact(username, target):
                                 self._safe_send_json(client, {
-                                    "type": "admin_users",
-                                    "status": "error",
-                                    "message": "Недостаточно прав"
-                                })
-                                continue
-                            payload = self._build_admin_users_payload()
-                            self._safe_send_json(client, payload)
-                            continue
-                        if action == "admin_delete_user":
-                            target = (msg.get("username") or "").strip()
-                            if not self._is_admin_account(username):
-                                self._safe_send_json(client, {
-                                    "type": "admin_delete_result",
+                                    "type": "add_contact_result",
                                     "status": "error",
                                     "username": target,
-                                    "message": "Недостаточно прав"
+                                    "message": "Вы не можете писать новым пользователям и добавлять их в контакты. Если вы считаете, что это ошибка, свяжитесь с поддержкой: moro23728@gmail.com"
                                 })
                                 continue
-                            if not target:
-                                self._safe_send_json(client, {
-                                    "type": "admin_delete_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "message": "Пользователь не найден"
-                                })
-                                continue
-                            if target == username:
-                                self._safe_send_json(client, {
-                                    "type": "admin_delete_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "message": "Нельзя удалить текущий аккаунт"
-                                })
-                                continue
-                            deleted, message = self._delete_account(target)
-                            if deleted:
-                                self.send_all_contacts()
-                                self._safe_send_json(client, {
-                                    "type": "admin_delete_result",
-                                    "status": "ok",
-                                    "username": target
-                                })
-                            else:
-                                self._safe_send_json(client, {
-                                    "type": "admin_delete_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "message": message or "Не удалось удалить пользователя"
-                                })
+                            self._add_contact_pair(username, target)
+                            sender_sock = self._socket_by_username(username)
+                            target_sock = self._socket_by_username(target)
+                            if sender_sock:
+                                self.send_contacts(sender_sock, username)
+                            if target_sock:
+                                self.send_contacts(target_sock, target)
+                        continue
+                    if action == "remove_contact":
+                        target = (msg.get("username") or "").strip()
+                        if target and target != username:
+                            self._remove_contact_pair(username, target)
+                            sender_sock = self._socket_by_username(username)
+                            target_sock = self._socket_by_username(target)
+                            if sender_sock:
+                                self.send_contacts(sender_sock, username)
+                            if target_sock:
+                                self.send_contacts(target_sock, target)
+                        continue
+                    if action == "get_note":
+                        target = (msg.get("username") or "").strip()
+                        note = self.get_note(username, target) if target else ""
+                        payload = {
+                            "type": "note",
+                            "username": target,
+                            "note": note
+                        }
+                        self._safe_send_json(client, payload)
+                        continue
+                    if action == "set_note":
+                        target = (msg.get("username") or "").strip()
+                        note = msg.get("note")
+                        if target and isinstance(note, str):
+                            self.set_note(username, target, note[:1000])
+                        continue
+                    if action == "set_clan":
+                        target = (msg.get("username") or "").strip()
+                        new_clan = (msg.get("clan") or "").strip()
+                        level = (msg.get("level") or "").strip().lower()
+                        if not target or not new_clan:
                             continue
-                        if action == "admin_set_deactivated":
-                            target = (msg.get("username") or "").strip()
-                            deactivated = bool(msg.get("deactivated", False))
-                            if not self._is_admin_account(username):
-                                self._safe_send_json(client, {
-                                    "type": "admin_deactivate_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "deactivated": deactivated,
-                                    "message": "Недостаточно прав"
-                                })
-                                continue
-                            if not target:
-                                self._safe_send_json(client, {
-                                    "type": "admin_deactivate_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "deactivated": deactivated,
-                                    "message": "Пользователь не найден"
-                                })
-                                continue
-                            if target == username:
-                                self._safe_send_json(client, {
-                                    "type": "admin_deactivate_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "deactivated": deactivated,
-                                    "message": "Нельзя изменять текущий аккаунт"
-                                })
-                                continue
-                            with self.accounts_lock:
-                                acc = self.accounts.get(target)
+                        requester = self._refresh_account_clan_for_user(username)
+                        if not requester:
+                            continue
+                        if self._get_account_clan(requester) != "Одмен":
+                            continue
+                        if level not in ("primary", "secondary"):
+                            level = "secondary"
+                        if len(new_clan) > 32:
+                            new_clan = new_clan[:32]
+                        with self.accounts_lock:
+                            acc = self.accounts.get(target)
                             if not acc:
-                                self._safe_send_json(client, {
-                                    "type": "admin_deactivate_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "deactivated": deactivated,
-                                    "message": "Пользователь не найден"
-                                })
                                 continue
-                            if deactivated:
-                                self._set_account_block(target, "deactivated")
+                            profile = dict(acc.get("profile") or {})
+                            if level == "primary":
+                                profile["clan_primary"] = new_clan
                             else:
-                                self._clear_account_block(target)
+                                profile["clan_secondary"] = new_clan
+                            acc["profile"] = profile
+                            self.accounts[target] = acc
+                            self.save_accounts()
+                        continue
+                    if action == "admin_list_users":
+                        if not self._is_admin_account(username):
+                            self._safe_send_json(client, {
+                                "type": "admin_users",
+                                "status": "error",
+                                "message": "Недостаточно прав"
+                            })
+                            continue
+                        payload = self._build_admin_users_payload()
+                        self._safe_send_json(client, payload)
+                        continue
+                    if action == "admin_delete_user":
+                        target = (msg.get("username") or "").strip()
+                        if not self._is_admin_account(username):
+                            self._safe_send_json(client, {
+                                "type": "admin_delete_result",
+                                "status": "error",
+                                "username": target,
+                                "message": "Недостаточно прав"
+                            })
+                            continue
+                        if not target:
+                            self._safe_send_json(client, {
+                                "type": "admin_delete_result",
+                                "status": "error",
+                                "username": target,
+                                "message": "Пользователь не найден"
+                            })
+                            continue
+                        if target == username:
+                            self._safe_send_json(client, {
+                                "type": "admin_delete_result",
+                                "status": "error",
+                                "username": target,
+                                "message": "Нельзя удалить текущий аккаунт"
+                            })
+                            continue
+                        deleted, message = self._delete_account(target)
+                        if deleted:
                             self.send_all_contacts()
                             self._safe_send_json(client, {
-                                "type": "admin_deactivate_result",
+                                "type": "admin_delete_result",
                                 "status": "ok",
-                                "username": target,
-                                "deactivated": deactivated
+                                "username": target
                             })
-                            continue
-                        if action == "admin_set_spam_warn":
-                            target = (msg.get("username") or "").strip()
-                            warned = bool(msg.get("warned", False))
-                            if not self._is_admin_account(username):
-                                self._safe_send_json(client, {
-                                    "type": "admin_warn_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "warned": warned,
-                                    "message": "Недостаточно прав"
-                                })
-                                continue
-                            if not target:
-                                self._safe_send_json(client, {
-                                    "type": "admin_warn_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "warned": warned,
-                                    "message": "Пользователь не найден"
-                                })
-                                continue
-                            if target == username:
-                                self._safe_send_json(client, {
-                                    "type": "admin_warn_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "warned": warned,
-                                    "message": "Нельзя изменять текущий аккаунт"
-                                })
-                                continue
-                            with self.accounts_lock:
-                                acc = self.accounts.get(target)
-                            if not acc:
-                                self._safe_send_json(client, {
-                                    "type": "admin_warn_result",
-                                    "status": "error",
-                                    "username": target,
-                                    "warned": warned,
-                                    "message": "Пользователь не найден"
-                                })
-                                continue
-                            current_status = self._account_block_status(target)
-                            if warned:
-                                if current_status in ("deactivated", "deleted"):
-                                    self._safe_send_json(client, {
-                                        "type": "admin_warn_result",
-                                        "status": "error",
-                                        "username": target,
-                                        "warned": warned,
-                                        "message": "Аккаунт деактивирован"
-                                    })
-                                    continue
-                                self._set_account_block(target, "spam_warn")
-                            else:
-                                if current_status == "spam_warn":
-                                    self._clear_account_block(target)
-                            self._safe_send_json(client, {
-                                "type": "admin_warn_result",
-                                "status": "ok",
-                                "username": target,
-                                "warned": warned
-                            })
-                            continue
-
-                    delete_msg_id = msg.get("delete_message")
-                    if delete_msg_id:
-                        self._handle_message_delete(username, delete_msg_id)
-                        continue
-
-                    text = msg.get("message")
-                    target = msg.get("to", "").strip()
-                    reply_to = msg.get("reply_to")
-
-                    if not text:
-                        continue
-
-                    # SEC-003: Validate message size
-                    if isinstance(text, str) and len(text) > self.max_message_size:
-                        # Reject oversized message
-                        continue
-
-                    if self._is_spam_warned(username):
-                        if target:
-                            if not self._has_contact(username, target):
-                                self._safe_send_json(client, {
-                                    "type": "system",
-                                    "message": "Вам запрещено писать новым людям"
-                                })
-                                continue
                         else:
                             self._safe_send_json(client, {
-                                "type": "system",
-                                "message": "Вам запрещено писать в общий чат"
+                                "type": "admin_delete_result",
+                                "status": "error",
+                                "username": target,
+                                "message": message or "Не удалось удалить пользователя"
+                            })
+                        continue
+                    if action == "admin_set_deactivated":
+                        target = (msg.get("username") or "").strip()
+                        deactivated = bool(msg.get("deactivated", False))
+                        if not self._is_admin_account(username):
+                            self._safe_send_json(client, {
+                                "type": "admin_deactivate_result",
+                                "status": "error",
+                                "username": target,
+                                "deactivated": deactivated,
+                                "message": "Недостаточно прав"
                             })
                             continue
+                        if not target:
+                            self._safe_send_json(client, {
+                                "type": "admin_deactivate_result",
+                                "status": "error",
+                                "username": target,
+                                "deactivated": deactivated,
+                                "message": "Пользователь не найден"
+                            })
+                            continue
+                        if target == username:
+                            self._safe_send_json(client, {
+                                "type": "admin_deactivate_result",
+                                "status": "error",
+                                "username": target,
+                                "deactivated": deactivated,
+                                "message": "Нельзя изменять текущий аккаунт"
+                            })
+                            continue
+                        with self.accounts_lock:
+                            acc = self.accounts.get(target)
+                        if not acc:
+                            self._safe_send_json(client, {
+                                "type": "admin_deactivate_result",
+                                "status": "error",
+                                "username": target,
+                                "deactivated": deactivated,
+                                "message": "Пользователь не найден"
+                            })
+                            continue
+                        if deactivated:
+                            self._set_account_block(target, "deactivated")
+                        else:
+                            self._clear_account_block(target)
+                        self.send_all_contacts()
+                        self._safe_send_json(client, {
+                            "type": "admin_deactivate_result",
+                            "status": "ok",
+                            "username": target,
+                            "deactivated": deactivated
+                        })
+                        continue
+                    if action == "admin_set_spam_warn":
+                        target = (msg.get("username") or "").strip()
+                        warned = bool(msg.get("warned", False))
+                        if not self._is_admin_account(username):
+                            self._safe_send_json(client, {
+                                "type": "admin_warn_result",
+                                "status": "error",
+                                "username": target,
+                                "warned": warned,
+                                "message": "Недостаточно прав"
+                            })
+                            continue
+                        if not target:
+                            self._safe_send_json(client, {
+                                "type": "admin_warn_result",
+                                "status": "error",
+                                "username": target,
+                                "warned": warned,
+                                "message": "Пользователь не найден"
+                            })
+                            continue
+                        if target == username:
+                            self._safe_send_json(client, {
+                                "type": "admin_warn_result",
+                                "status": "error",
+                                "username": target,
+                                "warned": warned,
+                                "message": "Нельзя изменять текущий аккаунт"
+                            })
+                            continue
+                        with self.accounts_lock:
+                            acc = self.accounts.get(target)
+                        if not acc:
+                            self._safe_send_json(client, {
+                                "type": "admin_warn_result",
+                                "status": "error",
+                                "username": target,
+                                "warned": warned,
+                                "message": "Пользователь не найден"
+                            })
+                            continue
+                        current_status = self._account_block_status(target)
+                        if warned:
+                            if current_status in ("deactivated", "deleted"):
+                                self._safe_send_json(client, {
+                                    "type": "admin_warn_result",
+                                    "status": "error",
+                                    "username": target,
+                                    "warned": warned,
+                                    "message": "Аккаунт деактивирован"
+                                })
+                                continue
+                            self._set_account_block(target, "spam_warn")
+                        else:
+                            if current_status == "spam_warn":
+                                self._clear_account_block(target)
+                        self._safe_send_json(client, {
+                            "type": "admin_warn_result",
+                            "status": "ok",
+                            "username": target,
+                            "warned": warned
+                        })
+                        continue
 
+                delete_msg_id = msg.get("delete_message")
+                if delete_msg_id:
+                    self._handle_message_delete(username, delete_msg_id)
+                    continue
+
+                text = msg.get("message")
+                target = msg.get("to", "").strip()
+                reply_to = msg.get("reply_to")
+
+                if not text:
+                    continue
+
+                # SEC-003: Validate message size
+                if isinstance(text, str) and len(text) > self.max_message_size:
+                    # Reject oversized message
+                    continue
+
+                if self._is_spam_warned(username):
                     if target:
-                        self.send_direct_message(username, target, text, reply_to)
+                        if not self._has_contact(username, target):
+                            self._safe_send_json(client, {
+                                "type": "system",
+                                "message": "Вам запрещено писать новым людям"
+                            })
+                            continue
                     else:
-                        self.broadcast_message(username, text, reply_to)
+                        self._safe_send_json(client, {
+                            "type": "system",
+                            "message": "Вам запрещено писать в общий чат"
+                        })
+                        continue
+
+                if target:
+                    self.send_direct_message(username, target, text, reply_to)
+                else:
+                    self.broadcast_message(username, text, reply_to)
 
         except Exception as e:
 
@@ -3141,6 +3062,23 @@ class MAXutkoServer:
         group_id = (msg.get("group_id") or "").strip()
         reply_to = msg.get("reply_to")
 
+        # Check spam_warn status
+        if self._is_spam_warned(username):
+            if not target or group_id:
+                self._safe_send_json(client, {
+                    "type": "file_upload_reject",
+                    "file_id": file_id,
+                    "message": "You are spam-warned"
+                })
+                return
+            if not self._has_contact(username, target):
+                self._safe_send_json(client, {
+                    "type": "file_upload_reject",
+                    "file_id": file_id,
+                    "message": "You are spam-warned"
+                })
+                return
+
         if not file_id or not filename or size <= 0:
             self._safe_send_json(client, {
                 "type": "file_upload_reject",
@@ -3204,11 +3142,39 @@ class MAXutkoServer:
                 self.send_user_groups(client, username)
                 self.send_group_message_history(client, username)
 
+        # Check file_index and file_uploads BEFORE opening file
+        with self.file_index_lock:
+            if file_id in self.file_index:
+                self._safe_send_json(client, {
+                    "type": "file_upload_reject",
+                    "file_id": file_id,
+                    "message": "File already exists"
+                })
+                return
+
+        with self.file_uploads_lock:
+            if file_id in self.file_uploads:
+                self._safe_send_json(client, {
+                    "type": "file_upload_reject",
+                    "file_id": file_id,
+                    "message": "Upload already in progress"
+                })
+                return
+            # Limit concurrent uploads per user to 3
+            user_uploads = sum(1 for u in self.file_uploads.values() if u.get("owner") == username)
+            if user_uploads >= 3:
+                self._safe_send_json(client, {
+                    "type": "file_upload_reject",
+                    "file_id": file_id,
+                    "message": "Too many concurrent uploads"
+                })
+                return
+
         safe_name = self._sanitize_filename(filename)
         file_path = os.path.join(self.files_dir, f"{file_id}_{safe_name}")
 
         try:
-            fp = open(file_path, "wb")
+            fp = open(file_path, "xb")
         except Exception:
             self._safe_send_json(client, {
                 "type": "file_upload_reject",
@@ -3218,17 +3184,6 @@ class MAXutkoServer:
             return
 
         with self.file_uploads_lock:
-            if file_id in self.file_uploads:
-                try:
-                    fp.close()
-                except Exception:
-                    pass
-                self._safe_send_json(client, {
-                    "type": "file_upload_reject",
-                    "file_id": file_id,
-                    "message": "File already exists"
-                })
-                return
             self.file_uploads[file_id] = {
                 "owner": username,
                 "target": target,
@@ -3490,19 +3445,21 @@ class MAXutkoServer:
     def _handle_message_delete(self, username, msg_id):
         if not msg_id:
             return
-        
+
         msg = None
         is_dm = False
-        
-        # Check in dm_history
+        group_id = ""
+
         with self.dm_history_lock:
             msg = self._find_dm_by_id(msg_id)
             if msg and msg.get("username") == username:
-                is_dm = True
+                group_id = (msg.get("group_id") or "").strip()
+                is_dm = not bool(group_id)
                 self.dm_history.remove(msg)
                 self.save_dm_history()
-        
-        # Check in history (broadcast messages)
+            else:
+                msg = None
+
         if not msg:
             with self.history_lock:
                 for item in self.history:
@@ -3511,18 +3468,38 @@ class MAXutkoServer:
                         self.history.remove(item)
                         self.save_history()
                         break
-        
+
         if not msg:
             return
-        
-        # Notify all clients
+
+        # If the deleted message was a file, remove it from disk and file_index
+        if msg.get("type") == "file":
+            file_id = (msg.get("file_id") or "").strip()
+            if file_id:
+                with self.file_index_lock:
+                    meta = self.file_index.pop(file_id, None)
+                    if meta:
+                        self.save_file_index()
+                if meta and meta.get("path") and os.path.exists(meta["path"]):
+                    try:
+                        os.remove(meta["path"])
+                    except Exception:
+                        pass
+
         notification = {
             "type": "message_deleted",
             "id": msg_id
         }
-        
-        if is_dm:
-            # Send to sender and recipient
+
+        if group_id:
+            with self.groups_lock:
+                grp = self.groups.get(group_id)
+                members = set(grp.get("members") or []) if grp else set()
+            with self.clients_lock:
+                for sock, name in list(self.clients.items()):
+                    if name in members:
+                        self._safe_send_json(sock, notification)
+        elif is_dm:
             sender_sock = self._socket_by_username(username)
             recipient = msg.get("to")
             if sender_sock:
@@ -3532,12 +3509,11 @@ class MAXutkoServer:
                 if recipient_sock:
                     self._safe_send_json(recipient_sock, notification)
         else:
-            # Broadcast to all clients
             with self.clients_lock:
                 for c in list(self.clients.keys()):
                     self._safe_send_json(c, notification)
 
-    def send_system(self, text):
+    def send_system(self, text, persist=False):
 
         data = {
             "username": "SYSTEM",
@@ -3549,7 +3525,8 @@ class MAXutkoServer:
         self._safe_log("system_message", {
             "message_len": len(text) if isinstance(text, str) else 0
         })
-        self.append_history(data)
+        if persist:
+            self.append_history(data)
 
         with self.clients_lock:
             for c in list(self.clients.keys()):

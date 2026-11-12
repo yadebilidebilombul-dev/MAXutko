@@ -1,8 +1,8 @@
 import hashlib
+import hmac
 import secrets
 import string
 import os
-import json
 
 try:
     from argon2 import PasswordHasher
@@ -114,7 +114,7 @@ def legacy_hash_password(password, salt):
 def verify_legacy_password(stored_hash, salt, password):
     if not stored_hash or not salt:
         return False
-    return legacy_hash_password(password, salt) == stored_hash
+    return hmac.compare_digest(legacy_hash_password(password, salt), stored_hash)
 
 
 def random_digits(length=10):
@@ -125,17 +125,33 @@ def random_digits(length=10):
 
 
 def build_passcode(username, password):
+    """Генерирует криптографически стойкий случайный PassCode (256 бит энтропии)."""
     if not username or not password:
         return ""
-    nonce = random_digits(10)
-    pw_hash = sha256_hex(password)
-    user_hash = sha256_hex(username)
-    nonce_hash = sha256_hex(nonce)
-    try:
-        combined = (int(pw_hash, 16) + int(user_hash, 16)) * int(nonce_hash, 16)
-    except Exception:
+    return secrets.token_hex(32)
+
+
+def hash_passcode(raw_passcode):
+    """Хеширует PassCode перед сохранением в БД сервера."""
+    raw_passcode = (raw_passcode or "").strip()
+    if not raw_passcode:
         return ""
-    return format(combined, "x")
+    return "sha256$" + sha256_hex(raw_passcode)
+
+
+def verify_passcode(stored_value, raw_passcode):
+    """Проверяет PassCode с защитой от timing-атак."""
+    stored_value = (stored_value or "").strip()
+    raw_passcode = (raw_passcode or "").strip()
+    if not stored_value or not raw_passcode:
+        return False
+    if stored_value.startswith("sha256$"):
+        expected = stored_value.split("$", 1)[1]
+        actual = sha256_hex(raw_passcode)
+        return hmac.compare_digest(expected, actual)
+    # Обратная совместимость со старыми записями
+    return hmac.compare_digest(stored_value, raw_passcode)
+
 
 # ================= TOKEN ENCRYPTION =================
 
@@ -144,33 +160,26 @@ _TOKEN_KEY_PATH = None
 
 
 def _init_token_cipher():
-    """Инициализирует Fernet cipher для шифрования токенов"""
     global _TOKEN_CIPHER, _TOKEN_KEY_PATH
-    
     if not _FERNET_AVAILABLE:
         return False
-    
     try:
         token_key_path = os.environ.get(
             "MAXUTKO_TOKEN_KEY_PATH",
             os.path.join(os.path.dirname(__file__), ".token_key")
         )
         _TOKEN_KEY_PATH = token_key_path
-        
         if os.path.exists(token_key_path):
             with open(token_key_path, "rb") as f:
                 key = f.read()
         else:
-            # Генерируем новый ключ и сохраняем его
             key = Fernet.generate_key()
             with open(token_key_path, "wb") as f:
                 f.write(key)
-            # Ограничиваем права доступа к файлу
             try:
                 os.chmod(token_key_path, 0o600)
-            except:
+            except Exception:
                 pass
-        
         _TOKEN_CIPHER = Fernet(key)
         return True
     except Exception as e:
@@ -179,18 +188,13 @@ def _init_token_cipher():
 
 
 def encrypt_token(token_str):
-    """Шифрует токен перед сохранением на диск"""
     if not token_str:
         return token_str
-    
     global _TOKEN_CIPHER
     if _TOKEN_CIPHER is None:
         _init_token_cipher()
-    
     if _TOKEN_CIPHER is None:
-        # Если Fernet недоступен, возвращаем токен как есть
         return token_str
-    
     try:
         token_bytes = token_str.encode("utf-8")
         encrypted = _TOKEN_CIPHER.encrypt(token_bytes)
@@ -201,22 +205,16 @@ def encrypt_token(token_str):
 
 
 def decrypt_token(encrypted_token):
-    """Расшифровывает токен при загрузке с диска"""
     if not encrypted_token:
         return encrypted_token
-    
     global _TOKEN_CIPHER
     if _TOKEN_CIPHER is None:
         _init_token_cipher()
-    
     if _TOKEN_CIPHER is None:
-        # Если Fernet недоступен, возвращаем токен как есть
         return encrypted_token
-    
     try:
         encrypted_bytes = encrypted_token.encode("utf-8")
         decrypted = _TOKEN_CIPHER.decrypt(encrypted_bytes)
         return decrypted.decode("utf-8")
-    except (InvalidToken, Exception) as e:
-        # Токен не зашифрован (старый формат), возвращаем как есть
+    except (InvalidToken, Exception):
         return encrypted_token

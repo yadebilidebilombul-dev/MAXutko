@@ -54,3 +54,4 @@ server/files/
 server/bots.json
 server/account_blocks.json
 server/code.py
+.continue/agents/new-config.yaml
